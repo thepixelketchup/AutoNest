@@ -78,6 +78,15 @@ export async function updateTransaction(transactionId, updates) {
   await setDoc(txRef, updates, { merge: true });
 }
 
+export async function updateBulkTransactions(updatesArray) {
+  const batch = writeBatch(db);
+  updatesArray.forEach(({ id, updates }) => {
+    const txRef = doc(db, 'Transactions', id);
+    batch.set(txRef, updates, { merge: true });
+  });
+  await batch.commit();
+}
+
 export async function deleteTransaction(transactionId) {
   await deleteDoc(doc(db, 'Transactions', transactionId));
 }

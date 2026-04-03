@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../hooks/useAuth';
-import { getTransactions, getBills, updateTransaction, deleteTransaction } from '../services/billService';
+import { getTransactions, getBills, updateTransaction, deleteTransaction, updateBulkTransactions } from '../services/billService';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { useToast } from '../hooks/useToast';
@@ -90,6 +90,53 @@ export default function Transactions() {
     }
   };
 
+  const handleSweepAutoMatch = async () => {
+    try {
+      const updates = [];
+      const currentUnmatched = transactions.filter(t => t.billId === null);
+      
+      currentUnmatched.forEach(tx => {
+         const matchedBill = bills.find(b => {
+            if (!tx.name) return false;
+            const importName = tx.name.toLowerCase();
+            if (b.matchKeywords && Array.isArray(b.matchKeywords) && b.matchKeywords.length > 0) {
+               return b.matchKeywords.some(kw => importName.includes(kw.trim().toLowerCase()));
+            } else {
+               return b.name && importName.includes(b.name.toLowerCase());
+            }
+         });
+         
+         if (matchedBill) {
+            const rawAmtStr = tx.amount ? tx.amount.toString().replace(/[^0-9.-]+/g,"") : "0";
+            const actualAmount = Math.abs(parseFloat(rawAmtStr)) || 0;
+            const isVariance = actualAmount > matchedBill.expectedAmount;
+            
+            updates.push({
+               id: tx.id,
+               updates: {
+                  billId: matchedBill.id,
+                  status: 'cleared',
+                  actualAmount: actualAmount,
+                  varianceReason: isVariance ? 'Auto-Sweep Variance' : ''
+               }
+            });
+         }
+      });
+      
+      if (updates.length > 0) {
+         setLoading(true);
+         await updateBulkTransactions(updates);
+         addToast(`Successfully auto-matched ${updates.length} historic transactions!`, 'success');
+         fetchData();
+      } else {
+         addToast("No new matches found among unmatched transactions.", "error");
+      }
+    } catch (e) {
+      addToast("Failed to run auto-match sweeper.", "error");
+      setLoading(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] text-gray-500">
@@ -110,7 +157,13 @@ export default function Transactions() {
           <h1 className="text-2xl font-bold text-gray-900">Transaction Ledger</h1>
           <p className="text-gray-500 text-sm">Manage, filter, and reconcile your global imported history.</p>
         </div>
-        <div className="flex bg-gray-100 p-1 rounded-lg">
+        <div className="flex bg-gray-100 p-1 rounded-lg items-center">
+           {tab === 'unmatched' && unmatched.length > 0 && (
+             <Button onClick={handleSweepAutoMatch} variant="primary" className="mr-3 py-1.5 px-3 text-sm flex items-center shadow-sm">
+                <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" /></svg>
+                Auto-Sweep Matches
+             </Button>
+           )}
            <button onClick={() => setTab('unmatched')} className={`px-4 py-2 rounded-md font-medium text-sm transition-colors ${tab === 'unmatched' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}>Unmatched ({unmatched.length})</button>
            <button onClick={() => setTab('matched')} className={`px-4 py-2 rounded-md font-medium text-sm transition-colors ${tab === 'matched' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}>Matched ({matched.length})</button>
         </div>
