@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { getBills, getTransactions } from '../services/billService';
+import { getBills, getTransactions, saveBulkTransactions } from '../services/billService';
 import { CsvUploader } from '../components/imports/CsvUploader';
 import { ColumnMapper } from '../components/imports/ColumnMapper';
 import { MatchingEngine } from '../components/imports/MatchingEngine';
@@ -20,6 +20,22 @@ export default function Imports() {
   
   const [pendingBills, setPendingBills] = useState([]);
   const [allBills, setAllBills] = useState([]);
+  
+  const [lastUploadDate, setLastUploadDate] = useState('');
+  const [allExistingTxs, setAllExistingTxs] = useState([]);
+
+  useEffect(() => {
+    if (step === 1 && userProfile?.householdId) {
+      getTransactions(userProfile.householdId).then(txs => {
+         const csvTxs = txs.filter(t => t.source === 'csv' && t.date);
+         if (csvTxs.length > 0) {
+            csvTxs.sort((a,b) => new Date(b.date) - new Date(a.date));
+            setLastUploadDate(csvTxs[0].date);
+         }
+         setAllExistingTxs(txs);
+      });
+    }
+  }, [step, userProfile?.householdId]);
 
   useEffect(() => {
     if (step === 3 && userProfile?.householdId) {
@@ -56,16 +72,42 @@ export default function Imports() {
   };
 
   const handleMapped = (normalizedData) => {
-    setMappedData(normalizedData);
+    // Filter duplicates based on existing DB transactions
+    let duplicates = 0;
+    const uniqueData = normalizedData.filter(newTx => {
+       // Using the user's exact constraint of duplicated date, name, and amount
+       const isDuplicate = allExistingTxs.some(ex => ex.date === newTx.date && ex.name === newTx.name && ex.amount === newTx.amount);
+       if (isDuplicate) duplicates++;
+       return !isDuplicate;
+    });
+
+    if (duplicates > 0) {
+       addToast(`Skipped ${duplicates} identical duplicate transactions globally.`, 'success');
+    }
+
+    if (uniqueData.length === 0 && normalizedData.length > 0) {
+       addToast("All imported transactions already exist. Import cancelled.", "error");
+       setStep(1);
+       return;
+    }
+
+    setMappedData(uniqueData);
     setStep(3);
   };
 
-  const handleComplete = () => {
-    setStep(1);
-    setRawCsvData([]);
-    setMappedData([]);
-    addToast("Bank import completed successfully.");
-    navigate('/');
+  const handleComplete = async (finalTransactions) => {
+    try {
+      if (finalTransactions && finalTransactions.length > 0) {
+        await saveBulkTransactions(finalTransactions);
+      }
+      setStep(1);
+      setRawCsvData([]);
+      setMappedData([]);
+      addToast(`Successfully imported ${finalTransactions?.length || 0} transactions!`, 'success');
+      navigate('/transactions');
+    } catch (e) {
+      addToast("Failed to save imported transactions.", "error");
+    }
   };
 
   return (
@@ -95,7 +137,7 @@ export default function Imports() {
       </div>
 
       <div className="mt-8">
-        {step === 1 && <CsvUploader onUpload={handleUpload} />}
+        {step === 1 && <CsvUploader onUpload={handleUpload} lastUploadDate={lastUploadDate} />}
         {step === 2 && <ColumnMapper data={rawCsvData} fields={csvFields} onMapped={handleMapped} />}
         {step === 3 && (
           loadingBills ? (

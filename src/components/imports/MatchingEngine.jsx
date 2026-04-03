@@ -7,76 +7,121 @@ export function MatchingEngine({ importedData, bills, pendingBills, onComplete }
   const [unmatchedPending, setUnmatchedPending] = useState([]);
   const [unmatchedImported, setUnmatchedImported] = useState([]);
   const [autoMatches, setAutoMatches] = useState([]);
+  const [approvedTransactions, setApprovedTransactions] = useState([]);
   const [selectedPending, setSelectedPending] = useState(null);
   
   const { userProfile } = useAuth();
-  const targetMonth = new Date().getMonth() + 1;
-  const targetYear = new Date().getFullYear();
 
   useEffect(() => {
     // Run basic matching algo
     let auto = [];
-    let remainingImported = [...importedData];
-    let remainingPending = [...pendingBills];
-
-    // Attempt to auto-match
-    remainingPending = remainingPending.filter(bill => {
-      // Find a matching transaction based on name substring
-      const matchIdx = remainingImported.findIndex(tx => 
-        tx.name && bill.name && tx.name.toLowerCase().includes(bill.name.toLowerCase())
-      );
-      if (matchIdx !== -1) {
-        auto.push({ bill, tx: remainingImported[matchIdx] });
-        remainingImported.splice(matchIdx, 1);
-        return false; // remove from pending
-      }
-      return true; // keep in pending
+    // Use ALL bills to match historically, not just pending
+    let remainingPending = [...bills]; // allow matching against any template
+    
+    // Attempt to auto-match multiple times to single templates
+    remainingImported.forEach((tx, idx) => {
+       const matchedBill = bills.find(b => b.name && tx.name && tx.name.toLowerCase().includes(b.name.toLowerCase()));
+       if (matchedBill) {
+          auto.push({ bill: matchedBill, tx, originalIdx: idx });
+       }
     });
+
+    // Remove auto-matched from unmatched queue
+    const matchedIndices = auto.map(m => m.originalIdx);
+    remainingImported = remainingImported.filter((_, idx) => !matchedIndices.includes(idx));
 
     setAutoMatches(auto);
     setUnmatchedPending(remainingPending);
     setUnmatchedImported(remainingImported);
-  }, [importedData, pendingBills]);
+  }, [importedData, bills]);
 
-  const commitMatch = async (bill, tx) => {
+  const prepareTransaction = (bill, tx) => {
     const rawAmtStr = tx.amount ? tx.amount.toString().replace(/[^0-9.-]+/g,"") : "0";
     const actualAmount = Math.abs(parseFloat(rawAmtStr)) || 0;
     const isVariance = actualAmount > bill.expectedAmount;
 
-    await saveTransaction(userProfile.householdId, bill.id, {
-      month: targetMonth,
-      year: targetYear,
+    let parsedMonth = new Date().getMonth() + 1;
+    let parsedYear = new Date().getFullYear();
+    const txDate = new Date(tx.date);
+    if (!isNaN(txDate.getTime())) {
+       parsedMonth = txDate.getMonth() + 1;
+       parsedYear = txDate.getFullYear();
+    }
+
+    return {
+      id: crypto.randomUUID ? crypto.randomUUID() : 'tx_' + Date.now() + Math.random(),
+      householdId: userProfile.householdId,
+      billId: bill.id,
+      month: parsedMonth,
+      year: parsedYear,
+      dateStr: tx.date,
+      name: tx.name,
+      amount: tx.amount,
       status: 'cleared',
       actualAmount: actualAmount,
       varianceReason: isVariance ? 'CSV Import Variance' : '',
       source: 'csv',
       rawBankDescription: tx.rawBankDescription
-    });
+    };
   };
 
-  const handleApproveAuto = async (index) => {
+  const handleApproveAuto = (index) => {
     const match = autoMatches[index];
-    await commitMatch(match.bill, match.tx);
+    const preparedTx = prepareTransaction(match.bill, match.tx);
     
-    // Remove from autoMatches
+    setApprovedTransactions(prev => [...prev, preparedTx]);
+    
     const newAuto = [...autoMatches];
     newAuto.splice(index, 1);
     setAutoMatches(newAuto);
   };
 
-  const handleManualMatch = async (txIdx) => {
+  const handleManualMatch = (txIdx) => {
     if (!selectedPending) return;
     const tx = unmatchedImported[txIdx];
-    await commitMatch(selectedPending, tx);
+    const preparedTx = prepareTransaction(selectedPending, tx);
     
-    // Remove from UI arrays
-    const newUnmatchedPending = unmatchedPending.filter(b => b.id !== selectedPending.id);
+    setApprovedTransactions(prev => [...prev, preparedTx]);
+    
     const newUnmatchedImported = [...unmatchedImported];
     newUnmatchedImported.splice(txIdx, 1);
     
-    setUnmatchedPending(newUnmatchedPending);
     setUnmatchedImported(newUnmatchedImported);
     setSelectedPending(null);
+  };
+  
+  const handleFinish = () => {
+    // Collect all approved matches
+    const finalMatches = [...approvedTransactions];
+    
+    // Collect all remaining unmatched items as valid global transactions with no billId (orphan)
+    unmatchedImported.forEach(tx => {
+       const rawAmtStr = tx.amount ? tx.amount.toString().replace(/[^0-9.-]+/g,"") : "0";
+       const txDate = new Date(tx.date);
+       let parsedMonth = new Date().getMonth() + 1;
+       let parsedYear = new Date().getFullYear();
+       if (!isNaN(txDate.getTime())) {
+         parsedMonth = txDate.getMonth() + 1;
+         parsedYear = txDate.getFullYear();
+       }
+       finalMatches.push({
+         id: crypto.randomUUID ? crypto.randomUUID() : 'tx_' + Date.now() + Math.random(),
+         householdId: userProfile.householdId,
+         billId: null, // Unmatched
+         month: parsedMonth,
+         year: parsedYear,
+         dateStr: tx.date,
+         name: tx.name,
+         amount: tx.amount,
+         status: 'pending_classification',
+         actualAmount: Math.abs(parseFloat(rawAmtStr)) || 0,
+         varianceReason: '',
+         source: 'csv',
+         rawBankDescription: tx.rawBankDescription
+       });
+    });
+    
+    onComplete(finalMatches);
   };
 
   return (
@@ -114,12 +159,12 @@ export function MatchingEngine({ importedData, bills, pendingBills, onComplete }
         {/* Left: Pending Bills */}
         <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm flex flex-col h-[500px]">
           <div className="bg-gray-50 p-4 border-b border-gray-200 shrink-0">
-            <h3 className="font-semibold text-gray-800">Unmatched Pending Bills</h3>
-            <p className="text-xs text-gray-500 mt-1">Select a bill to link it manually.</p>
+            <h3 className="font-semibold text-gray-800">All Bill Templates</h3>
+            <p className="text-xs text-gray-500 mt-1">Select any recurring bill to link to a transaction.</p>
           </div>
           <div className="divide-y divide-gray-100 overflow-y-auto grow">
             {unmatchedPending.length === 0 ? (
-               <div className="p-8 text-center text-gray-400 text-sm h-full flex items-center justify-center">All pending bills mapped!</div>
+               <div className="p-8 text-center text-gray-400 text-sm h-full flex items-center justify-center">No templates mapped!</div>
             ) : unmatchedPending.map(bill => (
               <div 
                 key={bill.id} 
@@ -169,8 +214,9 @@ export function MatchingEngine({ importedData, bills, pendingBills, onComplete }
         </div>
       </div>
       
-      <div className="flex justify-end pt-4 border-t border-gray-200">
-        <Button onClick={onComplete} variant="primary" className="px-8 shadow-sm">Finish Import Check</Button>
+      <div className="flex justify-between items-center pt-4 border-t border-gray-200">
+        <p className="text-sm font-medium text-gray-500 italic">Unmatched transactions will be saved to your ledger tab automatically.</p>
+        <Button onClick={handleFinish} variant="primary" className="px-8 shadow-sm">Save to Ledger</Button>
       </div>
     </div>
   );
