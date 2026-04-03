@@ -52,28 +52,29 @@ export function MatchingEngine({ importedData, bills, pendingBills, onComplete }
     const actualAmount = Math.abs(parseFloat(rawAmtStr)) || 0;
     const isVariance = actualAmount > bill.expectedAmount;
 
+    const effectiveDate = tx.dateStr || tx.date;
     let parsedMonth = new Date().getMonth() + 1;
     let parsedYear = new Date().getFullYear();
-    const txDate = new Date(tx.date);
+    const txDate = new Date(effectiveDate);
     if (!isNaN(txDate.getTime())) {
        parsedMonth = txDate.getMonth() + 1;
        parsedYear = txDate.getFullYear();
     }
 
     return {
-      id: crypto.randomUUID ? crypto.randomUUID() : 'tx_' + Date.now() + Math.random(),
+      id: tx.id || (crypto.randomUUID ? crypto.randomUUID() : 'tx_' + Date.now() + Math.random()),
       householdId: userProfile.householdId,
       billId: bill.id,
       month: parsedMonth,
       year: parsedYear,
-      dateStr: tx.date,
+      dateStr: effectiveDate,
       name: tx.name,
       amount: tx.amount,
       status: 'cleared',
       actualAmount: actualAmount,
-      varianceReason: isVariance ? 'CSV Import Variance' : '',
-      source: 'csv',
-      rawBankDescription: tx.rawBankDescription
+      varianceReason: isVariance ? 'Auto-Sweep Variance' : '',
+      source: tx.source || 'csv',
+      rawBankDescription: tx.rawBankDescription || ''
     };
   };
 
@@ -109,7 +110,8 @@ export function MatchingEngine({ importedData, bills, pendingBills, onComplete }
     // Collect all remaining unmatched items as valid global transactions with no billId (orphan)
     unmatchedImported.forEach(tx => {
        const rawAmtStr = tx.amount ? tx.amount.toString().replace(/[^0-9.-]+/g,"") : "0";
-       const txDate = new Date(tx.date);
+       const effectiveDate = tx.dateStr || tx.date;
+       const txDate = new Date(effectiveDate);
        let parsedMonth = new Date().getMonth() + 1;
        let parsedYear = new Date().getFullYear();
        if (!isNaN(txDate.getTime())) {
@@ -117,19 +119,19 @@ export function MatchingEngine({ importedData, bills, pendingBills, onComplete }
          parsedYear = txDate.getFullYear();
        }
        finalMatches.push({
-         id: crypto.randomUUID ? crypto.randomUUID() : 'tx_' + Date.now() + Math.random(),
+         id: tx.id || (crypto.randomUUID ? crypto.randomUUID() : 'tx_' + Date.now() + Math.random()),
          householdId: userProfile.householdId,
          billId: null, // Unmatched
          month: parsedMonth,
          year: parsedYear,
-         dateStr: tx.date,
+         dateStr: effectiveDate,
          name: tx.name,
          amount: tx.amount,
          status: 'pending_classification',
          actualAmount: Math.abs(parseFloat(rawAmtStr)) || 0,
          varianceReason: '',
-         source: 'csv',
-         rawBankDescription: tx.rawBankDescription
+         source: tx.source || 'csv',
+         rawBankDescription: tx.rawBankDescription || ''
        });
     });
     
@@ -157,7 +159,7 @@ export function MatchingEngine({ importedData, bills, pendingBills, onComplete }
                   </div>
                   <div className="flex-1">
                     <p className="text-sm font-semibold text-gray-900 truncate" title={match.tx.name}>{match.tx.name}</p>
-                    <p className="text-xs font-medium text-gray-500 mt-0.5">Scanned Act: {match.tx.amount} on {match.tx.date}</p>
+                    <p className="text-xs font-medium text-gray-500 mt-0.5">Scanned Act: {match.tx.amount} on {match.tx.dateStr || match.tx.date}</p>
                   </div>
                 </div>
                 <Button onClick={() => handleApproveAuto(i)} variant="primary" className="w-full md:w-auto py-2 px-6 shadow-sm">Approve Matching</Button>
@@ -217,7 +219,7 @@ export function MatchingEngine({ importedData, bills, pendingBills, onComplete }
                   <p className="text-sm font-bold text-gray-900 bg-gray-100 px-2 py-0.5 rounded whitespace-nowrap">{tx.amount}</p>
                 </div>
                 <div className="flex justify-between items-center mt-2">
-                   <p className="text-xs text-gray-500 font-medium">{tx.date}</p>
+                   <p className="text-xs text-gray-500 font-medium">{tx.dateStr || tx.date}</p>
                    {selectedPending && <span className="text-xs opacity-0 group-hover:opacity-100 text-blue-600 font-bold">Link →</span>}
                 </div>
               </div>

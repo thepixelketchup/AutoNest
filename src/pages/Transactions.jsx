@@ -4,6 +4,7 @@ import { getTransactions, getBills, updateTransaction, deleteTransaction, update
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { useToast } from '../hooks/useToast';
+import { SweepReviewModal } from '../components/ledger/SweepReviewModal';
 
 export default function Transactions() {
   const { userProfile } = useAuth();
@@ -16,7 +17,7 @@ export default function Transactions() {
 
   const [linkModeTxId, setLinkModeTxId] = useState(null);
   const [selectedBillId, setSelectedBillId] = useState('');
-
+  const [pendingProposals, setPendingProposals] = useState(null);
   useEffect(() => {
     if (userProfile?.householdId) {
       fetchData();
@@ -78,6 +79,63 @@ export default function Transactions() {
     }
   };
 
+  const handleSweepStart = () => {
+    const proposals = [];
+    const currentUnmatched = transactions.filter(t => t.billId === null);
+    
+    currentUnmatched.forEach(tx => {
+       const matchedBill = bills.find(b => {
+          if (!tx.name) return false;
+          const importName = tx.name.toLowerCase();
+          if (b.matchKeywords && Array.isArray(b.matchKeywords) && b.matchKeywords.length > 0) {
+             return b.matchKeywords.some(kw => importName.includes(kw.trim().toLowerCase()));
+          } else {
+             return b.name && importName.includes(b.name.toLowerCase());
+          }
+       });
+       
+       if (matchedBill) {
+          const rawAmtStr = tx.amount ? tx.amount.toString().replace(/[^0-9.-]+/g,"") : "0";
+          const actualAmount = Math.abs(parseFloat(rawAmtStr)) || 0;
+          const isVariance = actualAmount > matchedBill.expectedAmount;
+          
+          proposals.push({
+             id: tx.id,
+             txName: tx.name,
+             txAmount: tx.amount,
+             txDate: tx.dateStr || `${tx.month}/${tx.year}`,
+             billName: matchedBill.name,
+             updates: {
+                billId: matchedBill.id,
+                status: 'cleared',
+                actualAmount: actualAmount,
+                varianceReason: isVariance ? 'Auto-Sweep Variance' : ''
+             }
+          });
+       }
+    });
+    
+    if (proposals.length > 0) {
+       setPendingProposals(proposals);
+    } else {
+       addToast("No new matches found among historic transactions.", "info");
+    }
+  };
+
+  const handleApproveSweep = async (approvedMatches) => {
+    try {
+      setPendingProposals(null);
+      setLoading(true);
+      const payload = approvedMatches.map(m => ({ id: m.id, updates: m.updates }));
+      await updateBulkTransactions(payload);
+      addToast(`Successfully swept ${payload.length} historic transactions!`, 'success');
+      fetchData();
+    } catch (e) {
+      addToast("Failed to save approved sweep matches.", "error");
+      setLoading(false);
+    }
+  };
+
   const handleDelete = async (txId) => {
     if (window.confirm("Permanently delete this transaction?")) {
       try {
@@ -87,53 +145,6 @@ export default function Transactions() {
       } catch (err) {
         addToast("Error deleting transaction.", "error");
       }
-    }
-  };
-
-  const handleSweepAutoMatch = async () => {
-    try {
-      const updates = [];
-      const currentUnmatched = transactions.filter(t => t.billId === null);
-      
-      currentUnmatched.forEach(tx => {
-         const matchedBill = bills.find(b => {
-            if (!tx.name) return false;
-            const importName = tx.name.toLowerCase();
-            if (b.matchKeywords && Array.isArray(b.matchKeywords) && b.matchKeywords.length > 0) {
-               return b.matchKeywords.some(kw => importName.includes(kw.trim().toLowerCase()));
-            } else {
-               return b.name && importName.includes(b.name.toLowerCase());
-            }
-         });
-         
-         if (matchedBill) {
-            const rawAmtStr = tx.amount ? tx.amount.toString().replace(/[^0-9.-]+/g,"") : "0";
-            const actualAmount = Math.abs(parseFloat(rawAmtStr)) || 0;
-            const isVariance = actualAmount > matchedBill.expectedAmount;
-            
-            updates.push({
-               id: tx.id,
-               updates: {
-                  billId: matchedBill.id,
-                  status: 'cleared',
-                  actualAmount: actualAmount,
-                  varianceReason: isVariance ? 'Auto-Sweep Variance' : ''
-               }
-            });
-         }
-      });
-      
-      if (updates.length > 0) {
-         setLoading(true);
-         await updateBulkTransactions(updates);
-         addToast(`Successfully auto-matched ${updates.length} historic transactions!`, 'success');
-         fetchData();
-      } else {
-         addToast("No new matches found among unmatched transactions.", "error");
-      }
-    } catch (e) {
-      addToast("Failed to run auto-match sweeper.", "error");
-      setLoading(false);
     }
   };
 
@@ -150,8 +161,16 @@ export default function Transactions() {
   const unmatched = transactions.filter(t => t.billId === null);
   const viewingList = tab === 'matched' ? matched : unmatched;
 
+
   return (
     <div className="p-4 md:p-8 max-w-5xl mx-auto space-y-6">
+      {pendingProposals && (
+         <SweepReviewModal 
+           pendingProposals={pendingProposals}
+           onClose={() => setPendingProposals(null)}
+           onApprove={handleApproveSweep}
+         />
+      )}
       <header className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between space-y-4 md:space-y-0">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Transaction Ledger</h1>
@@ -159,7 +178,7 @@ export default function Transactions() {
         </div>
         <div className="flex bg-gray-100 p-1 rounded-lg items-center">
            {tab === 'unmatched' && unmatched.length > 0 && (
-             <Button onClick={handleSweepAutoMatch} variant="primary" className="mr-3 py-1.5 px-3 text-sm flex items-center shadow-sm">
+             <Button onClick={handleSweepStart} variant="primary" className="mr-3 py-1.5 px-3 text-sm flex items-center shadow-sm">
                 <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" /></svg>
                 Auto-Sweep Matches
              </Button>
