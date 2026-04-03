@@ -6,6 +6,7 @@ import Login from './pages/Login';
 import Signup from './pages/Signup';
 import Dashboard from './pages/Dashboard';
 import Onboarding from './pages/Onboarding';
+import Imports from './pages/Imports';
 
 function App() {
   return (
@@ -30,9 +31,8 @@ function App() {
             } 
           >
             <Route path="/" element={<Dashboard />} />
-            {/* Additional layout-wrapped routes go here */}
-            <Route path="/imports" element={<div className="p-8 text-gray-500">Imports view (Coming in Step 6)</div>} />
-            <Route path="/settings" element={<div className="p-8 text-gray-500">Settings view</div>} />
+            <Route path="/imports" element={<Imports />} />
+            <Route path="/settings" element={<div className="p-8 text-gray-500">Settings view module under construction</div>} />
           </Route>
         </Routes>
       </Router>
