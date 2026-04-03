@@ -93,11 +93,17 @@ export default function Providers() {
          ) : providers.map((p) => (
             <div key={p.id} className="bg-white rounded-2xl border border-gray-200 p-6 flex flex-row items-center justify-between hover:border-gray-300 transition-colors w-full group shadow-sm">
                <div className="flex flex-col space-y-3">
-                  <div className="flex items-center space-x-4">
+                  <div className="flex items-center space-x-3">
                      <h3 className="text-[22px] font-extrabold text-slate-800 tracking-tight">{p.name}</h3>
                      <span className="text-[14px] font-medium text-green-700 bg-[#e0f8e9] px-3 py-1 rounded-lg capitalize">
                         {p.paymentMethod || 'Manual'}
                      </span>
+                     {p.expectedDay && (
+                        <span className="text-[13px] font-medium text-slate-600 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-lg flex items-center">
+                           <svg className="w-3.5 h-3.5 mr-1 text-slate-400 transition-colors group-hover:text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                           Day {p.expectedDay}
+                        </span>
+                     )}
                   </div>
                   <div className="text-[17px] text-slate-600">
                      Category: {p.category}
