@@ -9,7 +9,7 @@ export default function AppLayout() {
     { name: 'Dashboard', path: '/' },
     { name: 'Transactions', path: '/transactions' },
     { name: 'Imports', path: '/imports' },
-    { name: 'Settings', path: '/settings' },
+    { name: 'Providers', path: '/providers' },
   ];
 
   return (

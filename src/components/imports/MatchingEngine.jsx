@@ -20,7 +20,19 @@ export function MatchingEngine({ importedData, bills, pendingBills, onComplete }
     
     // Attempt to auto-match multiple times to single templates
     remainingImported.forEach((tx, idx) => {
-       const matchedBill = bills.find(b => b.name && tx.name && tx.name.toLowerCase().includes(b.name.toLowerCase()));
+       const matchedBill = bills.find(b => {
+          if (!tx.name) return false;
+          const importName = tx.name.toLowerCase();
+          
+          if (b.matchKeywords && Array.isArray(b.matchKeywords) && b.matchKeywords.length > 0) {
+             // Keyword Match
+             return b.matchKeywords.some(kw => importName.includes(kw.trim().toLowerCase()));
+          } else {
+             // Fallback Name Substing Match
+             return b.name && importName.includes(b.name.toLowerCase());
+          }
+       });
+       
        if (matchedBill) {
           auto.push({ bill: matchedBill, tx, originalIdx: idx });
        }

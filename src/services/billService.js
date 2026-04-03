@@ -22,6 +22,11 @@ export async function deleteBill(billId) {
   await deleteDoc(doc(db, 'Bills', billId));
 }
 
+export async function updateBill(billId, updates) {
+  const billRef = doc(db, 'Bills', billId);
+  await setDoc(billRef, updates, { merge: true });
+}
+
 export async function getTransactions(householdId, month, year) {
   // If month/year are provided, filter. Otherwise get all.
   if (month && year) {

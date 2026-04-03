@@ -2,8 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
-import { getBills, addBill, deleteBill, getTransactions, saveTransaction } from '../services/billService';
-import { AddBillModal } from '../components/bills/AddBillModal';
+import { getBills, getTransactions, saveTransaction } from '../services/billService';
 import { ClearBillModal } from '../components/bills/ClearBillModal';
 import { useToast } from '../hooks/useToast';
 
@@ -15,7 +14,6 @@ export default function Dashboard() {
   const [bills, setBills] = useState([]);
   const [transactions, setTransactions] = useState([]);
   
-  const [isAddOpen, setIsAddOpen] = useState(false);
   const [clearBillSelect, setClearBillSelect] = useState(null); // Which bill to clear
   
   // Hardcode current month/year for MVP context
@@ -44,27 +42,6 @@ export default function Dashboard() {
     }
   }
 
-  async function handleAddBill(billData) {
-    try {
-      await addBill(userProfile.householdId, billData);
-      addToast("Bill template saved successfully.");
-      fetchData();
-    } catch (err) {
-      addToast("Failed to add bill.", "error");
-    }
-  }
-
-  async function handleDelete(billId) {
-    if (window.confirm("Delete this recurring bill template?")) {
-      try {
-        await deleteBill(billId);
-        addToast("Bill template removed.");
-        fetchData();
-      } catch (err) {
-        addToast("Failed to delete bill.", "error");
-      }
-    }
-  }
 
   async function handleClearBill(data) {
     try {
@@ -128,7 +105,6 @@ export default function Dashboard() {
           <h1 className="text-2xl font-bold text-gray-900">Household Dashboard</h1>
           <p className="text-gray-500 text-sm capitalize">{new Date().toLocaleString('default', { month: 'long' })} {targetYear} Ledger</p>
         </div>
-        <Button onClick={() => setIsAddOpen(true)} variant="primary" className="shadow-sm">+ Add Bill</Button>
       </header>
 
       {/* Metrics Row */}
@@ -186,7 +162,7 @@ export default function Dashboard() {
                     
                     <div className="flex items-center space-x-4">
                       {item.status === 'cleared' ? (
-                        <div className="text-right mr-2 bg-green-50/50 px-3 py-2 rounded-lg border border-green-100/50">
+                        <div className="text-right bg-green-50/50 px-3 py-2 rounded-lg border border-green-100/50">
                           <p className="text-sm font-bold text-green-600 mb-0.5 flex items-center justify-end">
                             <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" /></svg>
                             Cleared
@@ -197,10 +173,6 @@ export default function Dashboard() {
                       ) : (
                         <Button variant="outline" onClick={() => setClearBillSelect(item)} className="text-sm py-1.5 px-4 shadow-sm border-gray-300">Mark Cleared</Button>
                       )}
-                      
-                      <button onClick={() => handleDelete(item.id)} className="text-gray-300 hover:text-red-500 transition-colors bg-white rounded p-1 opacity-0 group-hover:opacity-100">
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                      </button>
                     </div>
                   </div>
                 ))
@@ -249,7 +221,6 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <AddBillModal isOpen={isAddOpen} onClose={() => setIsAddOpen(false)} onSave={handleAddBill} />
       <ClearBillModal isOpen={!!clearBillSelect} onClose={() => setClearBillSelect(null)} onSave={handleClearBill} bill={clearBillSelect} />
     </div>
   );
