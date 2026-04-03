@@ -10,6 +10,7 @@ import Onboarding from './pages/Onboarding';
 import Imports from './pages/Imports';
 import Transactions from './pages/Transactions';
 import Providers from './pages/Providers';
+import MatchReport from './pages/MatchReport';
 
 function App() {
   return (
@@ -36,6 +37,7 @@ function App() {
           >
             <Route path="/" element={<Dashboard />} />
             <Route path="/transactions" element={<Transactions />} />
+            <Route path="/reports" element={<MatchReport />} />
             <Route path="/imports" element={<Imports />} />
             <Route path="/providers" element={<Providers />} />
           </Route>
