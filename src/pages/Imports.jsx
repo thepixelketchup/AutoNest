@@ -13,26 +13,26 @@ export default function Imports() {
   const navigate = useNavigate();
   const [step, setStep] = useState(1); // 1: Upload, 2: Mapping, 3: Match Engine
   const [loadingBills, setLoadingBills] = useState(false);
-  
+
   const [rawCsvData, setRawCsvData] = useState([]);
   const [csvFields, setCsvFields] = useState([]);
   const [mappedData, setMappedData] = useState([]);
-  
+
   const [pendingBills, setPendingBills] = useState([]);
   const [allBills, setAllBills] = useState([]);
-  
+
   const [lastUploadDate, setLastUploadDate] = useState('');
   const [allExistingTxs, setAllExistingTxs] = useState([]);
 
   useEffect(() => {
     if (step === 1 && userProfile?.householdId) {
       getTransactions(userProfile.householdId).then(txs => {
-         const csvTxs = txs.filter(t => t.source === 'csv' && t.date);
-         if (csvTxs.length > 0) {
-            csvTxs.sort((a,b) => new Date(b.date) - new Date(a.date));
-            setLastUploadDate(csvTxs[0].date);
-         }
-         setAllExistingTxs(txs);
+        const csvTxs = txs.filter(t => t.source === 'csv' && (t.dateStr || t.date));
+        if (csvTxs.length > 0) {
+          csvTxs.sort((a, b) => new Date(b.dateStr || b.date) - new Date(a.dateStr || a.date));
+          setLastUploadDate(csvTxs[0].dateStr || csvTxs[0].date);
+        }
+        setAllExistingTxs(txs);
       });
     }
   }, [step, userProfile?.householdId]);
@@ -50,12 +50,12 @@ export default function Imports() {
       const targetYear = new Date().getFullYear();
       const fetchedBills = await getBills(userProfile.householdId);
       const fetchedTxs = await getTransactions(userProfile.householdId, targetMonth, targetYear);
-      
+
       const pending = fetchedBills.filter(bill => {
         const tx = fetchedTxs.find(t => t.billId === bill.id);
         return !tx || tx.status !== 'cleared';
       });
-      
+
       setAllBills(fetchedBills);
       setPendingBills(pending);
     } catch (e) {
@@ -75,20 +75,24 @@ export default function Imports() {
     // Filter duplicates based on existing DB transactions
     let duplicates = 0;
     const uniqueData = normalizedData.filter(newTx => {
-       // Using the user's exact constraint of duplicated date, name, and amount
-       const isDuplicate = allExistingTxs.some(ex => ex.date === newTx.date && ex.name === newTx.name && ex.amount === newTx.amount);
-       if (isDuplicate) duplicates++;
-       return !isDuplicate;
+      // Using the user's exact constraint of duplicated date, name, and amount
+      const isDuplicate = allExistingTxs.some(ex => 
+        (ex.date === newTx.date || ex.dateStr === newTx.date) && 
+        ex.name === newTx.name && 
+        ex.amount === newTx.amount
+      );
+      if (isDuplicate) duplicates++;
+      return !isDuplicate;
     });
 
     if (duplicates > 0) {
-       addToast(`Skipped ${duplicates} identical duplicate transactions globally.`, 'success');
+      addToast(`Skipped ${duplicates} identical duplicate transactions globally.`, 'success');
     }
 
     if (uniqueData.length === 0 && normalizedData.length > 0) {
-       addToast("All imported transactions already exist. Import cancelled.", "error");
-       setStep(1);
-       return;
+      addToast("All imported transactions already exist. Import cancelled.", "error");
+      setStep(1);
+      return;
     }
 
     setMappedData(uniqueData);
@@ -112,27 +116,27 @@ export default function Imports() {
 
   return (
     <div className="p-4 md:p-8 max-w-5xl mx-auto space-y-8">
-      <header className="mb-2">
-        <h1 className="text-2xl font-bold text-gray-900">Bank Statement Import</h1>
-        <p className="text-gray-500 text-sm mt-1">Upload your bank's CSV export to automatically match flushed bills.</p>
+      <header className="mb-8 mt-2">
+        <h1 className="text-[28px] font-bold text-gray-900 tracking-tight">Import Statement</h1>
+        <p className="text-gray-500 text-[15px] mt-1.5">Upload CSV exports from Bunq to match against your expenses.</p>
       </header>
 
       {/* Stepper UI Progress Bar */}
       <div className="flex items-center justify-between relative max-w-lg mx-auto mb-10">
         <div className="absolute left-0 top-1/2 transform -translate-y-1/2 w-full h-1 bg-gray-200 -z-10"></div>
         <div className="absolute left-0 top-1/2 transform -translate-y-1/2 h-1 bg-blue-600 transition-all duration-300 -z-10" style={{ width: step === 1 ? '0%' : step === 2 ? '50%' : '100%' }}></div>
-        
+
         <div className={`flex flex-col items-center ${step >= 1 ? 'text-blue-600' : 'text-gray-400'}`}>
-           <div className={`flex items-center justify-center w-10 h-10 rounded-full font-bold border-2 bg-white ${step >= 1 ? 'border-blue-600' : 'border-gray-300'}`}>1</div>
-           <span className="text-xs font-semibold mt-2 absolute -bottom-6">Upload</span>
+          <div className={`flex items-center justify-center w-10 h-10 rounded-full font-bold border-2 bg-white ${step >= 1 ? 'border-blue-600' : 'border-gray-300'}`}>1</div>
+          <span className="text-xs font-semibold mt-2 absolute -bottom-6">Upload</span>
         </div>
         <div className={`flex flex-col items-center ${step >= 2 ? 'text-blue-600' : 'text-gray-400'}`}>
-           <div className={`flex items-center justify-center w-10 h-10 rounded-full font-bold border-2 bg-white ${step >= 2 ? 'border-blue-600' : 'border-gray-300'}`}>2</div>
-           <span className="text-xs font-semibold mt-2 absolute -bottom-6">Map Columns</span>
+          <div className={`flex items-center justify-center w-10 h-10 rounded-full font-bold border-2 bg-white ${step >= 2 ? 'border-blue-600' : 'border-gray-300'}`}>2</div>
+          <span className="text-xs font-semibold mt-2 absolute -bottom-6">Map Columns</span>
         </div>
         <div className={`flex flex-col items-center ${step >= 3 ? 'text-blue-600' : 'text-gray-400'}`}>
-           <div className={`flex items-center justify-center w-10 h-10 rounded-full font-bold border-2 bg-white ${step >= 3 ? 'border-blue-600' : 'border-gray-300'}`}>3</div>
-           <span className="text-xs font-semibold mt-2 absolute -bottom-6">Match</span>
+          <div className={`flex items-center justify-center w-10 h-10 rounded-full font-bold border-2 bg-white ${step >= 3 ? 'border-blue-600' : 'border-gray-300'}`}>3</div>
+          <span className="text-xs font-semibold mt-2 absolute -bottom-6">Match</span>
         </div>
       </div>
 
@@ -141,9 +145,9 @@ export default function Imports() {
         {step === 2 && <ColumnMapper data={rawCsvData} fields={csvFields} onMapped={handleMapped} />}
         {step === 3 && (
           loadingBills ? (
-             <div className="flex justify-center items-center h-64 text-blue-600 animate-pulse font-medium">Running Smart Match Engine...</div>
+            <div className="flex justify-center items-center h-64 text-blue-600 animate-pulse font-medium">Running Smart Match Engine...</div>
           ) : (
-             <MatchingEngine importedData={mappedData} bills={allBills} pendingBills={pendingBills} onComplete={handleComplete} />
+            <MatchingEngine importedData={mappedData} bills={allBills} pendingBills={pendingBills} onComplete={handleComplete} />
           )
         )}
       </div>
