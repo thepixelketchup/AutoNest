@@ -7,6 +7,7 @@ import {
   signInWithPopup, 
   signOut 
 } from 'firebase/auth';
+import { getUserProfile, createUserProfile } from '../services/householdService';
 
 const AuthContext = createContext();
 
@@ -16,6 +17,7 @@ export function useAuth() {
 
 export function AuthProvider({ children }) {
   const [currentUser, setCurrentUser] = useState(null);
+  const [userProfile, setUserProfile] = useState(null);
   const [loading, setLoading] = useState(true);
 
   function signup(email, password) {
@@ -34,9 +36,30 @@ export function AuthProvider({ children }) {
     return signOut(auth);
   }
 
+  async function refreshProfile() {
+    if (auth.currentUser) {
+      const profile = await getUserProfile(auth.currentUser.uid);
+      setUserProfile(profile);
+    }
+  }
+
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, user => {
-      setCurrentUser(user);
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        setCurrentUser(user);
+        try {
+          let profile = await getUserProfile(user.uid);
+          if (!profile) {
+            profile = await createUserProfile(user);
+          }
+          setUserProfile(profile);
+        } catch (e) {
+          console.error("Error fetching profile:", e);
+        }
+      } else {
+        setCurrentUser(null);
+        setUserProfile(null);
+      }
       setLoading(false);
     });
 
@@ -45,6 +68,8 @@ export function AuthProvider({ children }) {
 
   const value = {
     currentUser,
+    userProfile,
+    refreshProfile,
     login,
     signup,
     loginWithGoogle,

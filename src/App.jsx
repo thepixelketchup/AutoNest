@@ -4,7 +4,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
 import Dashboard from './pages/Dashboard';
-import './App.css';
+import Onboarding from './pages/Onboarding';
 
 function App() {
   return (
@@ -13,6 +13,14 @@ function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
+          <Route 
+            path="/onboarding" 
+            element={
+              <ProtectedRoute requireHousehold={false}>
+                <Onboarding />
+              </ProtectedRoute>
+            } 
+          />
           <Route 
             path="/" 
             element={
