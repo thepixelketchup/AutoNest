@@ -15,7 +15,7 @@ export function MatchingEngine({ importedData, bills, pendingBills, onComplete }
   useEffect(() => {
     // Run basic matching algo
     let auto = [];
-    // Use ALL bills to match historically, not just pending
+    let remainingImported = [...importedData];
     let remainingPending = [...bills]; // allow matching against any template
     
     // Attempt to auto-match multiple times to single templates
