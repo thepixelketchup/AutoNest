@@ -5,11 +5,14 @@ import { getBills, getTransactions } from '../services/billService';
 import { CsvUploader } from '../components/imports/CsvUploader';
 import { ColumnMapper } from '../components/imports/ColumnMapper';
 import { MatchingEngine } from '../components/imports/MatchingEngine';
+import { useToast } from '../hooks/useToast';
 
 export default function Imports() {
   const { userProfile } = useAuth();
+  const { addToast } = useToast();
   const navigate = useNavigate();
   const [step, setStep] = useState(1); // 1: Upload, 2: Mapping, 3: Match Engine
+  const [loadingBills, setLoadingBills] = useState(false);
   
   const [rawCsvData, setRawCsvData] = useState([]);
   const [csvFields, setCsvFields] = useState([]);
@@ -25,19 +28,25 @@ export default function Imports() {
   }, [step, userProfile?.householdId]);
 
   async function fetchBills() {
-    const targetMonth = new Date().getMonth() + 1;
-    const targetYear = new Date().getFullYear();
-    const fetchedBills = await getBills(userProfile.householdId);
-    const fetchedTxs = await getTransactions(userProfile.householdId, targetMonth, targetYear);
-    
-    // Find bills that haven't been cleared for this month
-    const pending = fetchedBills.filter(bill => {
-      const tx = fetchedTxs.find(t => t.billId === bill.id);
-      return !tx || tx.status !== 'cleared';
-    });
-    
-    setAllBills(fetchedBills);
-    setPendingBills(pending);
+    try {
+      setLoadingBills(true);
+      const targetMonth = new Date().getMonth() + 1;
+      const targetYear = new Date().getFullYear();
+      const fetchedBills = await getBills(userProfile.householdId);
+      const fetchedTxs = await getTransactions(userProfile.householdId, targetMonth, targetYear);
+      
+      const pending = fetchedBills.filter(bill => {
+        const tx = fetchedTxs.find(t => t.billId === bill.id);
+        return !tx || tx.status !== 'cleared';
+      });
+      
+      setAllBills(fetchedBills);
+      setPendingBills(pending);
+    } catch (e) {
+      addToast("Failed to fetch pending bills.", "error");
+    } finally {
+      setLoadingBills(false);
+    }
   }
 
   const handleUpload = (data, fields) => {
@@ -55,6 +64,7 @@ export default function Imports() {
     setStep(1);
     setRawCsvData([]);
     setMappedData([]);
+    addToast("Bank import completed successfully.");
     navigate('/');
   };
 
@@ -87,7 +97,13 @@ export default function Imports() {
       <div className="mt-8">
         {step === 1 && <CsvUploader onUpload={handleUpload} />}
         {step === 2 && <ColumnMapper data={rawCsvData} fields={csvFields} onMapped={handleMapped} />}
-        {step === 3 && <MatchingEngine importedData={mappedData} bills={allBills} pendingBills={pendingBills} onComplete={handleComplete} />}
+        {step === 3 && (
+          loadingBills ? (
+             <div className="flex justify-center items-center h-64 text-blue-600 animate-pulse font-medium">Running Smart Match Engine...</div>
+          ) : (
+             <MatchingEngine importedData={mappedData} bills={allBills} pendingBills={pendingBills} onComplete={handleComplete} />
+          )
+        )}
       </div>
     </div>
   );

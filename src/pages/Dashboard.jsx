@@ -5,10 +5,13 @@ import { Button } from '../components/ui/Button';
 import { getBills, addBill, deleteBill, getTransactions, saveTransaction } from '../services/billService';
 import { AddBillModal } from '../components/bills/AddBillModal';
 import { ClearBillModal } from '../components/bills/ClearBillModal';
+import { useToast } from '../hooks/useToast';
 
 export default function Dashboard() {
   const { userProfile } = useAuth();
+  const { addToast } = useToast();
   
+  const [loading, setLoading] = useState(true);
   const [bills, setBills] = useState([]);
   const [transactions, setTransactions] = useState([]);
   
@@ -26,38 +29,60 @@ export default function Dashboard() {
   }, [userProfile?.householdId]);
 
   async function fetchData() {
-    const fetchedBills = await getBills(userProfile.householdId);
-    const fetchedTxs = await getTransactions(userProfile.householdId, targetMonth, targetYear);
-    // Sort bills by expected day
-    fetchedBills.sort((a, b) => a.expectedDay - b.expectedDay);
-    setBills(fetchedBills);
-    setTransactions(fetchedTxs);
+    try {
+      setLoading(true);
+      const fetchedBills = await getBills(userProfile.householdId);
+      const fetchedTxs = await getTransactions(userProfile.householdId, targetMonth, targetYear);
+      // Sort bills by expected day
+      fetchedBills.sort((a, b) => a.expectedDay - b.expectedDay);
+      setBills(fetchedBills);
+      setTransactions(fetchedTxs);
+    } catch (err) {
+      addToast("Failed to sync dashboard data.", "error");
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function handleAddBill(billData) {
-    await addBill(userProfile.householdId, billData);
-    fetchData();
+    try {
+      await addBill(userProfile.householdId, billData);
+      addToast("Bill template saved successfully.");
+      fetchData();
+    } catch (err) {
+      addToast("Failed to add bill.", "error");
+    }
   }
 
   async function handleDelete(billId) {
     if (window.confirm("Delete this recurring bill template?")) {
-      await deleteBill(billId);
-      fetchData();
+      try {
+        await deleteBill(billId);
+        addToast("Bill template removed.");
+        fetchData();
+      } catch (err) {
+        addToast("Failed to delete bill.", "error");
+      }
     }
   }
 
   async function handleClearBill(data) {
-    const txObj = {
-      month: targetMonth,
-      year: targetYear,
-      status: 'cleared',
-      actualAmount: data.actualAmount,
-      varianceReason: data.varianceReason,
-      source: 'manual',
-      rawBankDescription: ''
-    };
-    await saveTransaction(userProfile.householdId, clearBillSelect.id, txObj);
-    fetchData();
+    try {
+      const txObj = {
+        month: targetMonth,
+        year: targetYear,
+        status: 'cleared',
+        actualAmount: data.actualAmount,
+        varianceReason: data.varianceReason,
+        source: 'manual',
+        rawBankDescription: ''
+      };
+      await saveTransaction(userProfile.householdId, clearBillSelect.id, txObj);
+      addToast("Transaction cleared successfully!");
+      fetchData();
+    } catch (err) {
+      addToast("Failed to clear transaction.", "error");
+    }
   }
 
   // Derived state
@@ -86,6 +111,15 @@ export default function Dashboard() {
 
   const currentDay = new Date().getDate();
   const pendingOverdue = mergedLedger.filter(b => b.status === 'pending' && b.expectedDay < currentDay);
+
+  if (loading && bills.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] text-gray-500">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
+        <p className="font-medium animate-pulse">Syncing dashboard data...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="p-4 md:p-8 max-w-6xl mx-auto space-y-6">
