@@ -8,6 +8,7 @@ export default function AppLayout() {
   const navItems = [
     { name: 'Dashboard', path: '/' },
     { name: 'Bills', path: '/bills' },
+    { name: 'Contributions', path: '/contributions' },
     { name: 'Transactions', path: '/transactions' },
     { name: 'Reports', path: '/reports' },
     { name: 'Import Statement', path: '/imports' },

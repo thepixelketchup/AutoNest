@@ -996,7 +996,7 @@ export default function Transactions() {
                     <div className="min-w-0 flex-1">
                       <p className="font-semibold text-gray-800 text-sm truncate">{tx.name}</p>
                       {tx.rawBankDescription && (
-                        <p className="text-[10px] text-gray-400 truncate" title={tx.rawBankDescription}>
+                        <p className="text-[10px] text-gray-400 break-words whitespace-normal leading-relaxed" title={tx.rawBankDescription}>
                           {tx.rawBankDescription}
                         </p>
                       )}
@@ -1111,7 +1111,7 @@ export default function Transactions() {
                   </div>
 
                   {tx.rawBankDescription && (
-                    <p className="text-[10px] text-gray-400 truncate mt-0.5" title={tx.rawBankDescription}>{tx.rawBankDescription}</p>
+                    <p className="text-[10px] text-gray-400 break-words whitespace-normal leading-relaxed mt-0.5" title={tx.rawBankDescription}>{tx.rawBankDescription}</p>
                   )}
 
                   <div className="flex flex-col gap-1.5">

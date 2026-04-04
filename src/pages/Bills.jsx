@@ -566,9 +566,8 @@ export default function Bills() {
       const parts = household.trackingStartDate.split('-');
       if (parts.length > 0) startYear = parseInt(parts[0], 10);
     }
-    const billYears = bills.map(b => getBillPeriodMonthYear(b).year).filter(Boolean);
-    const maxYear = Math.max(thisYear, ...billYears);
-    const minYear = Math.min(startYear, ...billYears, thisYear);
+    const maxYear = thisYear;
+    const minYear = startYear;
 
     const yrs = ['all', 'this_month'];
     for (let y = maxYear; y >= minYear; y--) {

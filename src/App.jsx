@@ -11,6 +11,7 @@ import Imports from './pages/Imports';
 import Transactions from './pages/Transactions';
 import Providers from './pages/Providers';
 import Members from './pages/Members';
+import Contributions from './pages/Contributions';
 import Bills from './pages/Bills';
 import MatchReport from './pages/MatchReport';
 
@@ -40,6 +41,7 @@ function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/bills" element={<Bills />} />
             <Route path="/transactions" element={<Transactions />} />
+            <Route path="/contributions" element={<Contributions />} />
             <Route path="/reports" element={<MatchReport />} />
             <Route path="/imports" element={<Imports />} />
             <Route path="/providers" element={<Providers />} />
