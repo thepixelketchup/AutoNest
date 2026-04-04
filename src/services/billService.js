@@ -318,5 +318,13 @@ export async function updateBulkTransactions(householdId, updatesArray) {
 }
 
 export async function deleteTransaction(householdId, transactionId) {
-  await deleteDoc(doc(db, 'Households', householdId, 'transactions', transactionId));
+  await setDoc(doc(db, 'Households', householdId, 'transactions', transactionId), {
+    isDeleted: true
+  }, { merge: true });
+}
+
+export async function restoreTransaction(householdId, transactionId) {
+  await setDoc(doc(db, 'Households', householdId, 'transactions', transactionId), {
+    isDeleted: false
+  }, { merge: true });
 }

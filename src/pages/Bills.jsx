@@ -589,7 +589,7 @@ export default function Bills() {
       const { year: ay, month: am } = getBillPeriodMonthYear(a);
       const { year: by, month: bm } = getBillPeriodMonthYear(b);
       return (by * 12 + bm) - (ay * 12 + am);
-    }).reverse();
+    });
   }, [bills, yearFilter, provFilter, statusFilter]);
 
   // Summary totals for filtered set
@@ -701,18 +701,18 @@ export default function Bills() {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setShowRecurring(true)}
-            className="flex items-center gap-2 px-4 py-2.5 bg-purple-100 text-purple-700 border border-purple-200 rounded-xl text-sm font-bold hover:bg-purple-200 transition"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-            Recurring
-          </button>
-          <button
             onClick={() => { setEditBill(null); setShowModal(true); }}
             className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-bold hover:bg-blue-700 transition shadow-sm"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" /></svg>
             Add Bill
+          </button>
+          <button
+            onClick={() => setShowRecurring(true)}
+            className="flex items-center gap-2 px-4 py-2.5 bg-purple-100 text-purple-700 border border-purple-200 rounded-xl text-sm font-bold hover:bg-purple-200 transition"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+            Add Recurring Bills
           </button>
         </div>
       </div>
@@ -806,7 +806,11 @@ export default function Bills() {
                         </div>
                         <div className="min-w-0">
                           <p className="font-semibold text-gray-800 text-sm truncate">{prov?.name || '—'}</p>
-                          <p className="text-[10px] text-gray-400 capitalize">{prov?.category || ''}</p>
+                          <p className="text-[10px] text-gray-400 truncate">
+                            <span className="capitalize">{prov?.category || 'Uncategorized'}</span>
+                            {bill.notes && <span className="text-gray-300 mx-1.5 font-normal">|</span>}
+                            {bill.notes && <span className="normal-case">{bill.notes}</span>}
+                          </p>
                         </div>
                       </div>
 
@@ -894,9 +898,14 @@ export default function Bills() {
                           <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center font-black text-sm">
                             {prov?.name?.charAt(0)?.toUpperCase() || '?'}
                           </div>
-                          <div>
-                            <p className="font-bold text-gray-800">{prov?.name || '—'}</p>
-                            <p className="text-xs text-gray-400">{getBillPeriodLabel(bill)}</p>
+                          <div className="min-w-0 pr-2">
+                            <p className="font-bold text-gray-800 truncate">{prov?.name || '—'}</p>
+                            <p className="text-[10px] text-gray-400 truncate mb-0.5">
+                              <span className="capitalize">{prov?.category || 'Uncategorized'}</span>
+                              {bill.notes && <span className="text-gray-300 mx-1.5 font-normal">|</span>}
+                              {bill.notes && <span className="normal-case">{bill.notes}</span>}
+                            </p>
+                            <p className="text-[11px] text-gray-400 font-medium">{getBillPeriodLabel(bill)}</p>
                           </div>
                         </div>
                         <span className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${s.bg} ${s.text}`}>{s.label}</span>
@@ -933,10 +942,6 @@ export default function Bills() {
                       </div>
                     </div>
 
-                    {/* Notes if any */}
-                    {bill.notes && (
-                      <p className="mt-1.5 text-xs text-gray-400 italic ml-10 hidden md:block">"{bill.notes}"</p>
-                    )}
                   </div>
                 );
               })}

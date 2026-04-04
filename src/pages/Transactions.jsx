@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import {
   getTransactions, getProviders, getMembers, getBills,
-  updateTransaction, deleteTransaction,
+  updateTransaction, deleteTransaction, restoreTransaction,
   linkTransactionToBill, unlinkTransactionFromBill,
   getBillPeriodLabel,
 } from '../services/billService';
@@ -17,6 +17,19 @@ function parseAmount(str) {
   if (lc > ld) s = s.replace(/\./g, '').replace(/,/g, '.');
   else if (ld > lc) s = s.replace(/,/g, '');
   return parseFloat(s) || 0;
+}
+
+function formatDDMMYYYY(dateInput) {
+  if (!dateInput) return '';
+  if (typeof dateInput === 'string' && dateInput.includes('-')) {
+     const parts = dateInput.split('-');
+     if (parts.length === 3 && parts[0].length === 4) {
+       return `${parts[2]}-${parts[1]}-${parts[0]}`;
+     }
+  }
+  const d = new Date(dateInput);
+  if (isNaN(d.valueOf())) return dateInput;
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '-');
 }
 
 function scoreBillForTx(bill, txDate) {
@@ -207,12 +220,77 @@ function LinkModal({ tx, allBills, providers, members, onSave, onClose, getAlloc
   // How much is already linked; passed in from parent so it uses the same helper
   const existingAllocated = getAllocated ? getAllocated(tx) : 0;
 
-  const [linkMode, setLinkMode]     = useState('bill');
+  const availableBudget = Math.abs(amountFloat) - existingAllocated;
+
+  const [linkMode, setLinkMode] = useState(() => {
+    if (amountFloat > 0) return 'member';
+    return 'bill';
+  });
+  
   const [selectedMemberId, setSMId] = useState('');
-  const [selections, setSelections] = useState({});
+  
+  const [selections, setSelections] = useState(() => {
+    if (amountFloat >= 0 || existingAllocated > 0) return {};
+    
+    const searchSpace = `${tx.name || ''} ${tx.rawBankDescription || ''}`.toLowerCase();
+    
+    const dm = members.find(m => {
+      const nm = m.name && searchSpace.includes(m.name.toLowerCase());
+      const kw = Array.isArray(m.matchKeywords) ? m.matchKeywords.some(k => searchSpace.includes(k.trim().toLowerCase())) : false;
+      return nm || kw;
+    });
+    
+    const p = providers.find(p => {
+      const nm = p.name && searchSpace.includes(p.name.toLowerCase());
+      const kw = Array.isArray(p.matchKeywords) ? p.matchKeywords.some(k => searchSpace.includes(k.trim().toLowerCase())) : false;
+      return nm || kw;
+    });
+
+    if (dm && !p) return {};
+    
+    if (p) {
+      const txD = new Date(tx.dateStr || `${tx.year}-${tx.month}-01`);
+      const candidateBills = allBills
+        .filter(b => b.providerId === p.id && b.status !== 'cleared' && !existingBillIds.includes(b.id))
+        .map(b => ({ ...b, _score: scoreBillForTx(b, txD) }))
+        .filter(b => b._score > 0)
+        .sort((a, b) => b._score - a._score);
+      if (candidateBills.length > 0) {
+        return { [candidateBills[0].id]: availableBudget };
+      }
+    }
+    return {};
+  });
+
+  useEffect(() => {
+    const searchSpace = `${tx.name || ''} ${tx.rawBankDescription || ''}`.toLowerCase();
+    if (amountFloat > 0) {
+      const m = members.find(m => {
+        const nm = m.name && searchSpace.includes(m.name.toLowerCase());
+        const kw = Array.isArray(m.matchKeywords) ? m.matchKeywords.some(k => searchSpace.includes(k.trim().toLowerCase())) : false;
+        return nm || kw;
+      });
+      if (m) setSMId(m.id);
+    } else if (existingAllocated === 0) {
+      const dm = members.find(m => {
+        const nm = m.name && searchSpace.includes(m.name.toLowerCase());
+        const kw = Array.isArray(m.matchKeywords) ? m.matchKeywords.some(k => searchSpace.includes(k.trim().toLowerCase())) : false;
+        return nm || kw;
+      });
+      const p = providers.find(p => {
+        const nm = p.name && searchSpace.includes(p.name.toLowerCase());
+        const kw = Array.isArray(p.matchKeywords) ? p.matchKeywords.some(k => searchSpace.includes(k.trim().toLowerCase())) : false;
+        return nm || kw;
+      });
+      if (dm && !p) {
+        setLinkMode('member');
+        setSMId(dm.id);
+      }
+    }
+  }, [amountFloat, existingAllocated, members, providers, tx]);
+
   const txDate = tx.dateStr ? new Date(tx.dateStr) : new Date();
 
-  const availableBudget = Math.abs(amountFloat) - existingAllocated;
   const canSave = isIncome
     ? !!selectedMemberId
     : linkMode === 'member'
@@ -229,10 +307,11 @@ function LinkModal({ tx, allBills, providers, members, onSave, onClose, getAlloc
         <div className="px-6 py-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center shrink-0">
           <div>
             <h2 className="text-lg font-bold text-gray-900">Link Transaction</h2>
-            <p className="text-xs text-gray-400 mt-0.5 truncate max-w-sm">
-              {tx.name} · <span className={amountFloat > 0 ? 'text-green-600 font-bold' : 'text-red-500 font-bold'}>{tx.amount}</span>
+            <p className="text-xs text-gray-400 mt-0.5 max-w-sm whitespace-normal">
+              <span className="font-semibold text-gray-700">{tx.name}</span> · <span className={amountFloat > 0 ? 'text-green-600 font-bold' : 'text-red-500 font-bold'}>{tx.amount}</span>
               <span className="ml-2 text-gray-300">·</span>
-              <span className="ml-2 text-gray-400">{tx.dateStr || ''}</span>
+              <span className="ml-2 text-gray-400">{formatDDMMYYYY(tx.dateStr)}</span>
+
             </p>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-700 p-1 rounded-lg">
@@ -510,9 +589,14 @@ export default function Transactions() {
   // ── Transaction classification helpers ──────────────────────────────────────
   // How much of a tx has been allocated across all linked bills
   function getAllocated(tx) {
-    // Only sum billAmounts — never fall back to actualAmount (it can be stale after unlinks)
-    const billAmounts = tx.billAmounts || {};
-    return Object.values(billAmounts).reduce((s, v) => s + Number(v || 0), 0);
+    if (tx.billAmounts && Object.keys(tx.billAmounts).length > 0) {
+      return Object.values(tx.billAmounts).reduce((s, v) => s + Number(v || 0), 0);
+    }
+    // Fallback for legacy single-link transactions that lack billAmounts mapping
+    if (tx.billId || tx.billIds?.length > 0) {
+      return Math.abs(parseAmount(tx.amount));
+    }
+    return 0;
   }
 
   const CENT = 0.01; // 1¢ tolerance
@@ -527,11 +611,13 @@ export default function Transactions() {
 
   // Matched = fully settled bills OR contributions
   // Unmatched = no links at all  OR partially settled (stays here so user can finish linking)
-  const matched   = transactions.filter(t => isContributionTx(t) || isFullySettled(t));
-  const unmatched = transactions.filter(t => !isContributionTx(t) && !isFullySettled(t));
+  const matched   = transactions.filter(t => !t.isDeleted && (isContributionTx(t) || isFullySettled(t)));
+  const unmatched = transactions.filter(t => !t.isDeleted && (!isContributionTx(t) && !isFullySettled(t)));
+  const deletedTxs= transactions.filter(t => t.isDeleted);
 
   const q = search.trim().toLowerCase();
-  const viewList = (tab === 'matched' ? matched : unmatched).filter(t =>
+  const txSource = tab === 'matched' ? matched : (tab === 'deleted' ? deletedTxs : unmatched);
+  const viewList = txSource.filter(t =>
     !q ||
     (t.name || '').toLowerCase().includes(q) ||
     (t.rawBankDescription || '').toLowerCase().includes(q)
@@ -720,13 +806,24 @@ export default function Transactions() {
   }
 
   async function handleDelete(txId) {
-    if (!window.confirm('Permanently delete this transaction?')) return;
+    if (!window.confirm('Move this transaction to Trash?')) return;
     try {
       await deleteTransaction(userProfile.householdId, txId);
-      addToast('Deleted.');
+      addToast('Moved to Trash.', 'info');
       fetchData();
     } catch {
-      addToast('Error deleting.', 'error');
+      addToast('Error moving to Trash.', 'error');
+    }
+  }
+
+  async function handleRestore(txId) {
+    try {
+      // If it has bills, it'll correctly restore its links automatically (since we never wiped them hard)
+      await restoreTransaction(userProfile.householdId, txId);
+      addToast('Transaction restored.', 'success');
+      fetchData();
+    } catch {
+      addToast('Error restoring.', 'error');
     }
   }
 
@@ -740,11 +837,12 @@ export default function Transactions() {
   }
 
   return (
-    <div className="p-4 md:p-8 max-w-5xl mx-auto space-y-6">
+    <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-6">
 
       {/* Step-by-step sweep modal */}
       {sweeping && (
         <SweepStepModal
+          key={sweepQueue[sweepStep]?.id || sweepStep}
           proposal={sweepQueue[sweepStep]}
           stepNum={sweepStep + 1}
           totalSteps={sweepQueue.length}
@@ -771,36 +869,24 @@ export default function Transactions() {
       )}
 
       {/* Header */}
-      <header className="mb-2 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+      <header className="mb-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-black text-gray-900 tracking-tight">Transaction Ledger</h1>
+          <h1 className="text-3xl font-black text-gray-900 tracking-tight">Transactions</h1>
           <p className="text-gray-400 text-sm mt-0.5">Review, match, and reconcile all imported transactions</p>
         </div>
-        <div className="flex items-center bg-gray-100 border border-gray-200 p-1 rounded-xl gap-1">
+        <div className="flex items-center gap-2">
           {tab === 'unmatched' && unmatched.length > 0 && (
-            <Button onClick={handleSweepStart} variant="primary" className="mr-1 py-1.5 px-3 text-sm flex items-center gap-1.5 shadow-sm">
+            <button onClick={handleSweepStart} className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-bold hover:bg-blue-700 transition shadow-sm">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
               Auto-Sweep
-            </Button>
+            </button>
           )}
-          <button onClick={() => setTab('unmatched')}
-            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${tab === 'unmatched' ? 'bg-white shadow text-blue-700' : 'text-gray-500 hover:text-gray-700'}`}>
-            Unmatched ({unmatched.filter(t => !hasAnyBillLink(t)).length})
-            {unmatched.filter(t => isPartiallySettled(t)).length > 0 && (
-              <span className="ml-1.5 text-[10px] font-black text-amber-600 bg-amber-100 px-1.5 py-0.5 rounded-full">
-                {unmatched.filter(t => isPartiallySettled(t)).length} partial
-              </span>
-            )}
-          </button>
-          <button onClick={() => setTab('matched')}
-            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${tab === 'matched' ? 'bg-white shadow text-blue-700' : 'text-gray-500 hover:text-gray-700'}`}>
-            Matched ({matched.length})
-          </button>
         </div>
       </header>
 
-      {/* Search bar — between header and table */}
-      <div className="flex items-center gap-3">
+      {/* Search bar and Tabs */}
+      <div className="flex flex-col md:flex-row md:items-center gap-3">
+        {/* Search Bar - render first */}
         <div className="relative flex-1">
           <svg className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M17 11A6 6 0 115 11a6 6 0 0112 0z" /></svg>
           <input
@@ -816,6 +902,28 @@ export default function Transactions() {
             </button>
           )}
         </div>
+
+        {/* Tabs - render second */}
+        <div className="flex items-center bg-gray-100 border border-gray-200 p-1 rounded-xl gap-1 shrink-0 overflow-x-auto">
+          <button onClick={() => setTab('unmatched')}
+            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${tab === 'unmatched' ? 'bg-white shadow text-blue-700' : 'text-gray-500 hover:text-gray-700'}`}>
+            Unmatched ({unmatched.filter(t => !hasAnyBillLink(t)).length})
+            {unmatched.filter(t => isPartiallySettled(t)).length > 0 && (
+              <span className="ml-1.5 text-[10px] font-black text-amber-600 bg-amber-100 px-1.5 py-0.5 rounded-full">
+                {unmatched.filter(t => isPartiallySettled(t)).length} partial
+              </span>
+            )}
+          </button>
+          <button onClick={() => setTab('matched')}
+            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${tab === 'matched' ? 'bg-white shadow text-blue-700' : 'text-gray-500 hover:text-gray-700'}`}>
+            Matched ({matched.length})
+          </button>
+          <button onClick={() => setTab('deleted')}
+            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${tab === 'deleted' ? 'bg-white shadow text-red-700' : 'text-gray-500 hover:text-gray-700'}`}>
+            Deleted ({deletedTxs.length})
+          </button>
+        </div>
+
         {q && (
           <span className="text-xs text-gray-400 shrink-0 whitespace-nowrap">
             {viewList.length === 0 ? 'No results' : `${viewList.length} result${viewList.length !== 1 ? 's' : ''}`}
@@ -824,6 +932,16 @@ export default function Transactions() {
       </div>
 
       <Card className="p-0 border-gray-200 overflow-hidden min-h-[400px]">
+        {/* Desktop Header Grid */}
+        <div className="hidden md:grid items-center gap-4 px-6 py-4 text-[11px] font-bold text-gray-400 uppercase tracking-wider bg-gray-50/80 border-b border-gray-100 min-h-[50px]"
+          style={{ gridTemplateColumns: '2fr 1fr 1fr 2fr 100px' }}>
+          <div>Transaction</div>
+          <div>Date</div>
+          <div>Amount</div>
+          <div>Matched Links</div>
+          <div className="text-right pr-2">Actions</div>
+        </div>
+
         <div className="divide-y divide-gray-100">
           {viewList.length === 0 ? (
             <div className="py-20 text-center">
@@ -840,108 +958,207 @@ export default function Transactions() {
             const partial   = isPartiallySettled(tx);
             const allocated = getAllocated(tx);
             const allocPct  = txAmt > 0 ? Math.min(100, (allocated / txAmt) * 100) : 0;
+            const isIncome  = amtF > 0;
 
             const linkedBillIds = tx.billIds?.length > 0 ? tx.billIds : (tx.billId ? [tx.billId] : []);
             const linkedBills   = linkedBillIds.map(id => allBills.find(b => b.id === id)).filter(Boolean);
             const member        = members.find(m => m.id === tx.memberId);
 
             return (
-              <div key={tx.id} className={`p-5 flex flex-col md:flex-row md:items-start justify-between transition-colors gap-4 ${
-                partial ? 'hover:bg-amber-50/40 border-l-2 border-amber-400' : 'hover:bg-gray-50/60'
-              }`}>
-                <div className="flex-1 min-w-0">
-                  <div className="flex flex-wrap items-center gap-2 mb-1">
-                    <p className="font-bold text-gray-900 text-base truncate">{tx.name}</p>
+              <div key={tx.id} className={`hover:bg-gray-50/50 transition-colors ${partial ? 'bg-amber-50/20' : ''}`}>
+                
+                {/* Desktop Grid Row */}
+                <div className="hidden md:grid items-center gap-4 px-6 py-4 min-h-[84px]"
+                  style={{ gridTemplateColumns: '2fr 1fr 1fr 2fr 100px' }}>
+                  
+                  {/* Column 1: Transaction name & desc */}
+                  <div className="flex items-center gap-3 min-w-0 pr-4 w-full">
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-black text-sm shrink-0 shadow-sm ${
+                      isContrib
+                        ? (isDeduct ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700')
+                        : 'bg-indigo-100 text-indigo-700'
+                    }`}>
+                      {tx.name?.charAt(0)?.toUpperCase() || '?'}
+                    </div>
+                    <div className="min-w-0 flex-1 whitespace-normal">
+                      <p className="font-bold text-gray-900 text-sm leading-tight">{tx.name}</p>
+                      {tx.rawBankDescription && (
+                        <p className="text-[10px] text-gray-400 font-medium mt-1 leading-snug break-words" title={tx.rawBankDescription}>
+                          {tx.rawBankDescription}
+                        </p>
+                      )}
+                    </div>
+                  </div>
 
-                    {/* Partial settlement badge (Unmatched tab) */}
+                  {/* Column 2: Date */}
+                  <div>
+                    <p className="text-sm font-semibold text-gray-700">{formatDDMMYYYY(tx.dateStr || `${tx.year}-${tx.month}-01`)}</p>
+                  </div>
+
+                  {/* Column 3: Amount */}
+                  <div>
+                    <p className={`text-sm font-black ${isIncome ? 'text-green-600' : 'text-gray-900'}`}>{tx.amount}</p>
+                    {!isContrib && tab === 'matched' && allocated > 0 && (
+                      <p className="text-[10px] font-semibold text-green-600 mt-0.5">✓ {allocPct.toFixed(0)}% settled</p>
+                    )}
+                  </div>
+
+                  {/* Column 4: Matched Links */}
+                  <div className="flex flex-col items-start min-w-0">
                     {partial && (
-                      <span className="inline-flex items-center gap-1.5 text-[11px] font-black px-2.5 py-0.5 rounded-full bg-amber-100 border border-amber-200 text-amber-700">
-                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 8v4l3 3" /><circle cx="12" cy="12" r="9" strokeWidth={2} /></svg>
-                        Partial · € {allocated.toFixed(2)} of € {txAmt.toFixed(2)} allocated
+                      <div className="w-full max-w-[200px] flex items-center gap-2 mb-1.5">
+                        <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                          <div className="h-full bg-amber-400 rounded-full transition-all" style={{ width: `${allocPct}%` }} />
+                        </div>
+                        <span className="text-[10px] font-bold text-amber-600 shrink-0">{Math.round(allocPct)}%</span>
+                      </div>
+                    )}
+                    
+                    <div className="flex flex-wrap gap-1">
+                      {linkedBills.map(bill => {
+                        const prov = providers.find(p => p.id === bill.providerId);
+                        const billAlloc = tx.billAmounts?.[bill.id];
+                        return (
+                          <span key={bill.id} className="group inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded bg-blue-50 border border-blue-100 text-blue-700">
+                            {prov?.name || '—'} · {getBillPeriodLabel(bill)}
+                            {billAlloc !== undefined && <span className="ml-1 text-blue-400 font-normal">€{Number(billAlloc).toFixed(2)}</span>}
+                            <button onClick={e => { e.stopPropagation(); handleUnlinkOne(tx, bill.id); }}
+                              className="ml-0.5 text-blue-300 hover:text-red-500 transition opacity-0 group-hover:opacity-100" title="Unlink">
+                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg>
+                            </button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                    {isContrib && (
+                      <span className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded border mt-0.5 ${isDeduct ? 'bg-red-50 border-red-200 text-red-600' : 'bg-green-50 border-green-200 text-green-700'}`}>
+                        {isDeduct ? '↓ Deduction from' : '↑ Contribution by'} {member?.name || 'Member'}
                       </span>
                     )}
+                    {tab === 'unmatched' && !partial && !isContrib && (
+                      <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Unmatched</span>
+                    )}
+                  </div>
 
-                    {/* Bill link badges — with per-bill unlink × */}
-                    {linkedBills.map(bill => {
-                      const prov = providers.find(p => p.id === bill.providerId);
-                      const billAlloc = tx.billAmounts?.[bill.id];
-                      return (
-                        <span key={bill.id} className="group inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded bg-blue-50 border border-blue-100 text-blue-700">
-                          {prov?.name || '—'} · {getBillPeriodLabel(bill)}
-                          {billAlloc !== undefined && (
-                            <span className="ml-1 text-blue-400 font-normal">€{Number(billAlloc).toFixed(2)}</span>
-                          )}
-                          {/* × unlink this specific bill */}
-                          <button
-                            onClick={e => { e.stopPropagation(); handleUnlinkOne(tx, bill.id); }}
-                            title="Remove this bill link"
-                            className="ml-0.5 text-blue-300 hover:text-red-500 transition opacity-0 group-hover:opacity-100"
-                          >
-                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg>
+                  {/* Column 5: Actions */}
+                  <div className="flex items-center justify-end gap-1.5 pr-2">
+                    {tab === 'deleted' ? (
+                      <button onClick={() => handleRestore(tx.id)}
+                        className="px-3 py-1.5 text-[11px] font-bold text-emerald-700 border border-emerald-200 bg-emerald-50 rounded-lg hover:bg-emerald-100 transition shadow-sm">
+                        Restore
+                      </button>
+                    ) : (
+                      <>
+                        {tab === 'unmatched' && (
+                          <button onClick={() => setLinkModalTx(tx)}
+                            className={`flex items-center gap-1 px-3 py-1.5 text-[11px] font-bold rounded-lg transition border shadow-sm ${
+                              partial
+                                ? 'text-amber-700 border-amber-200 bg-amber-50 hover:bg-amber-100'
+                                : 'text-blue-700 border-blue-200 bg-blue-50 hover:bg-blue-100'
+                            }`}>
+                            <span>{partial ? 'Add More' : 'Link'}</span>
                           </button>
-                        </span>
-                      );
-                    })}
+                        )}
+                        {tab === 'matched' && (
+                          <button onClick={() => handleUnlinkAll(tx)}
+                            className="px-2 py-1.5 text-[11px] font-bold text-orange-600 border border-orange-200 rounded-lg hover:bg-orange-50 transition">
+                            Unlink All
+                          </button>
+                        )}
+                        {tab !== 'matched' && !hasAnyBillLink(tx) && (
+                          <button onClick={() => handleDelete(tx.id)} title="Move to Trash"
+                            className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
 
-                    {/* Contribution/deduction badge */}
+                {/* Mobile Fallback Grid */}
+                <div className="md:hidden flex flex-col p-4 gap-3">
+                  <div className="flex justify-between items-start gap-3 flex-wrap">
+                    <div className="flex items-center gap-2">
+                       <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-black text-sm shrink-0 shadow-sm ${
+                         isContrib
+                           ? (isDeduct ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700')
+                           : 'bg-indigo-100 text-indigo-700'
+                       }`}>
+                         {tx.name?.charAt(0)?.toUpperCase()}
+                       </div>
+                       <div className="min-w-0 pr-2 whitespace-normal flex-1">
+                         <p className="font-bold text-gray-900 text-sm leading-tight">{tx.name}</p>
+                         <p className="text-xs text-gray-400 font-medium mt-1">{formatDDMMYYYY(tx.dateStr || `${tx.year}-${tx.month}-01`)}</p>
+                       </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className={`text-sm font-black ${isIncome ? 'text-green-600' : 'text-gray-900'}`}>{tx.amount}</p>
+                    </div>
+                  </div>
+
+                  {tx.rawBankDescription && (
+                    <p className="text-[11px] text-gray-400 italic break-words leading-snug">"{tx.rawBankDescription}"</p>
+                  )}
+
+                  <div className="flex flex-col gap-1.5">
+                    {partial && (
+                      <div className="w-full flex items-center gap-2 mb-1.5">
+                        <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                          <div className="h-full bg-amber-400 rounded-full transition-all" style={{ width: `${allocPct}%` }} />
+                        </div>
+                        <span className="text-[10px] font-bold text-amber-600">{Math.round(allocPct)}%</span>
+                      </div>
+                    )}
+                    <div className="flex flex-wrap gap-1">
+                      {linkedBills.map(bill => {
+                        const prov = providers.find(p => p.id === bill.providerId);
+                        const billAlloc = tx.billAmounts?.[bill.id];
+                        return (
+                          <span key={bill.id} className="group inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded bg-blue-50 border border-blue-100 text-blue-700">
+                            {prov?.name || '—'} · {getBillPeriodLabel(bill)}
+                            {billAlloc !== undefined && <span className="ml-1 text-blue-400 font-normal">€{Number(billAlloc).toFixed(2)}</span>}
+                            <button onClick={e => { e.stopPropagation(); handleUnlinkOne(tx, bill.id); }}
+                              className="ml-0.5 text-blue-300 hover:text-red-500 transition">
+                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg>
+                            </button>
+                          </span>
+                        );
+                      })}
+                    </div>
                     {isContrib && (
-                      <span className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded border ${
-                        isDeduct ? 'bg-red-50 border-red-200 text-red-600' : 'bg-green-50 border-green-200 text-green-700'
-                      }`}>
+                      <span className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 border rounded w-fit ${isDeduct ? 'bg-red-50 border-red-200 text-red-600' : 'bg-green-50 border-green-200 text-green-700'}`}>
                         {isDeduct ? '↓ Deduction from' : '↑ Contribution by'} {member?.name || 'Member'}
                       </span>
                     )}
                   </div>
 
-                  <p className="text-sm text-gray-400 font-medium mt-0.5">
-                    {tx.dateStr || `${tx.month}/${tx.year}`}
-                    <span className="mx-2 text-gray-200">•</span>
-                    <span className="text-gray-700 font-black bg-gray-100 px-2 py-0.5 rounded">{tx.amount}</span>
-                    {/* Show total paid for matched non-contribution */}
-                    {!isContrib && tab === 'matched' && allocated > 0 && (
-                      <span className="ml-2 text-green-600 font-semibold text-xs">✓ € {allocated.toFixed(2)} settled</span>
+                  <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-gray-50 mt-1">
+                    {tab === 'deleted' ? (
+                      <button onClick={() => handleRestore(tx.id)}
+                        className="px-3 py-1.5 text-[11px] font-bold text-emerald-700 border border-emerald-200 bg-emerald-50 rounded-lg hover:bg-emerald-100 transition shadow-sm">
+                        Restore
+                      </button>
+                    ) : (
+                      <>
+                        {tab === 'unmatched' && (
+                          <button onClick={() => setLinkModalTx(tx)} className={`flex items-center gap-1 px-3 py-1.5 text-[11px] font-bold rounded-lg transition border ${partial ? 'text-amber-700 border-amber-200 bg-amber-50' : 'text-blue-700 border-blue-200 bg-blue-50'}`}>
+                            <span>{partial ? 'Add More' : 'Link'}</span>
+                          </button>
+                        )}
+                        {tab === 'matched' && (
+                          <button onClick={() => handleUnlinkAll(tx)} className="px-2 py-1.5 text-[11px] font-bold text-orange-600 border border-orange-200 rounded-lg hover:bg-orange-50 transition">
+                            Unlink All
+                          </button>
+                        )}
+                        {tab !== 'matched' && !hasAnyBillLink(tx) && (
+                          <button onClick={() => handleDelete(tx.id)} title="Move to Trash" className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                          </button>
+                        )}
+                      </>
                     )}
-                  </p>
-
-                  {/* Allocation progress bar (partial only) */}
-                  {partial && (
-                    <div className="mt-2 flex items-center gap-2">
-                      <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
-                        <div className="h-full bg-amber-400 rounded-full transition-all" style={{ width: `${allocPct}%` }} />
-                      </div>
-                      <span className="text-[10px] font-bold text-amber-600 shrink-0">{allocPct.toFixed(0)}%</span>
-                    </div>
-                  )}
-
-                  {tx.rawBankDescription && (
-                    <p className="text-xs text-gray-400 mt-1.5 italic line-clamp-2">"{tx.rawBankDescription}"</p>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-2 shrink-0">
-                  {/* Unmatched: Link button (also shown for partial so user can add more links) */}
-                  {tab === 'unmatched' && (
-                    <button onClick={() => setLinkModalTx(tx)}
-                      className={`flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-xl transition border ${
-                        partial
-                          ? 'text-amber-700 border-amber-200 bg-amber-50 hover:bg-amber-100'
-                          : 'text-blue-700 border-blue-200 bg-blue-50 hover:bg-blue-100'
-                      }`}>
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
-                      {partial ? 'Add More' : 'Link'}
-                    </button>
-                  )}
-                  {/* Matched: Unlink all */}
-                  {tab === 'matched' && (
-                    <button onClick={() => handleUnlinkAll(tx)}
-                      className="px-3 py-2 text-xs font-bold text-orange-600 border border-orange-200 rounded-xl hover:bg-orange-50 transition">
-                      Unlink All
-                    </button>
-                  )}
-                  <button onClick={() => handleDelete(tx.id)}
-                    className="p-2 rounded-xl text-gray-300 hover:text-red-500 hover:bg-red-50 transition">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                  </button>
+                  </div>
                 </div>
               </div>
             );
