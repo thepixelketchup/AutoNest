@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import { useGlobalPeriod } from '../hooks/useGlobalPeriod';
 import { getProviders, getMembers, getBills, getTransactions, getBillPeriodMonthYear } from '../services/billService';
 import { getHousehold } from '../services/householdService';
 import { useToast } from '../hooks/useToast';
@@ -73,7 +74,7 @@ export default function Dashboard() {
   const [allBills, setAllBills] = useState([]);
   const [allTxs, setAllTxs] = useState([]);
   const [household, setHousehold] = useState(null);
-  const [selectedPeriod, setSelectedPeriod] = useState('month'); // 'month' | '2025' | '2026' | 'all'
+  const [selectedPeriod, setSelectedPeriod] = useGlobalPeriod('this_month'); // 'this_month' | '2025' | '2026' | 'all'
 
   useEffect(() => {
     if (userProfile?.householdId) fetchData();
@@ -116,7 +117,7 @@ export default function Dashboard() {
   // ── Filter helpers ─────────────────────────────────────────────────────────
   const billInPeriod = (bill) => {
     const { month: bm, year: by } = getBillPeriodMonthYear(bill);
-    if (selectedPeriod === 'month') return bm === thisMonth && by === thisYear;
+    if (selectedPeriod === 'this_month') return bm === thisMonth && by === thisYear;
     if (selectedPeriod === 'all') return true;
     return by === parseInt(selectedPeriod, 10);
   };
@@ -124,7 +125,7 @@ export default function Dashboard() {
     const d = tx.dateStr ? new Date(tx.dateStr) : null;
     const txYear = d && !isNaN(d) ? d.getFullYear() : tx.year;
     const txMonth = d && !isNaN(d) ? d.getMonth() + 1 : tx.month;
-    if (selectedPeriod === 'month') return txYear === thisYear && txMonth === thisMonth;
+    if (selectedPeriod === 'this_month') return txYear === thisYear && txMonth === thisMonth;
     if (selectedPeriod === 'all') return true;
     return txYear === parseInt(selectedPeriod, 10);
   };
@@ -146,7 +147,7 @@ export default function Dashboard() {
   const totalFinesPaid = enrichedBills.filter(b => b.tx).reduce((s, b) => s + (b.lateFee || 0), 0);
   const clearedCount = enrichedBills.filter(b => b.tx).length;
   const paidPct = totalExpected > 0 ? (totalPaid / totalExpected) * 100 : 0;
-  const overdueBills = selectedPeriod === 'month'
+  const overdueBills = selectedPeriod === 'this_month'
     ? enrichedBills.filter(b => !b.tx && b.billingPeriod?.type === 'month' && b.status === 'overdue')
     : [];
 
@@ -177,7 +178,7 @@ export default function Dashboard() {
 
   // Time-series chart
   const chartData = useMemo(() => {
-    if (selectedPeriod === 'month') {
+    if (selectedPeriod === 'this_month') {
       // Current month: last 6 months comparison
       return Array.from({ length: 6 }, (_, i) => {
         const d = new Date(thisYear, now.getMonth() - (5 - i), 1);
@@ -227,7 +228,7 @@ export default function Dashboard() {
 
   const unmatched = allTxs.filter(t => t.billId === null && t.status !== 'contribution');
 
-  const periodLabel = selectedPeriod === 'month'
+  const periodLabel = selectedPeriod === 'this_month'
     ? `${now.toLocaleString('default', { month: 'long' })} ${thisYear}`
     : selectedPeriod === 'all' ? 'All Time' : selectedPeriod;
 
@@ -256,8 +257,8 @@ export default function Dashboard() {
           {/* Period Selector */}
           <div className="flex bg-gray-100 border border-gray-200 rounded-xl p-1 gap-1 flex-wrap">
             <button
-              onClick={() => setSelectedPeriod('month')}
-              className={`px-3 py-1.5 rounded-lg text-sm font-bold transition-all ${selectedPeriod === 'month' ? 'bg-white shadow text-blue-700' : 'text-gray-500 hover:text-gray-700'}`}
+              onClick={() => setSelectedPeriod('this_month')}
+              className={`px-3 py-1.5 rounded-lg text-sm font-bold transition-all ${selectedPeriod === 'this_month' ? 'bg-white shadow text-blue-700' : 'text-gray-500 hover:text-gray-700'}`}
             >
               This Month
             </button>
@@ -273,7 +274,7 @@ export default function Dashboard() {
               onClick={() => setSelectedPeriod('all')}
               className={`px-3 py-1.5 rounded-lg text-sm font-bold transition-all ${selectedPeriod === 'all' ? 'bg-white shadow text-blue-700' : 'text-gray-500 hover:text-gray-700'}`}
             >
-              All Time
+              All Years
             </button>
           </div>
           {/* Quick Actions */}
@@ -289,7 +290,7 @@ export default function Dashboard() {
       </div>
 
       {/* ── ALERTS (month-only) ─────────────────────────────────────────── */}
-      {selectedPeriod === 'month' && (overdueBills.length > 0 || unmatched.length > 0) && (
+      {selectedPeriod === 'this_month' && (overdueBills.length > 0 || unmatched.length > 0) && (
         <div className="flex flex-col sm:flex-row gap-3">
           {overdueBills.length > 0 && (
             <div className="flex-1 flex items-center gap-3 bg-red-50 border border-red-200 rounded-2xl px-5 py-3.5">
@@ -376,7 +377,7 @@ export default function Dashboard() {
           {/* Spend Chart */}
           <div className="bg-white rounded-2xl border border-gray-200 p-6">
             <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400 mb-4">
-              {selectedPeriod === 'month' ? '6-Month Trend' : selectedPeriod === 'all' ? 'Year-by-Year Spend' : `${selectedPeriod} Monthly Spend`}
+              {selectedPeriod === 'this_month' ? '6-Month Trend' : selectedPeriod === 'all' ? 'Year-by-Year Spend' : `${selectedPeriod} Monthly Spend`}
             </p>
             <div className="flex items-end gap-1.5 h-28">
               {chartData.map((d, i) => {
@@ -413,7 +414,7 @@ export default function Dashboard() {
               <h2 className="font-bold text-gray-900">Spend by Provider</h2>
               <p className="text-xs text-gray-400 mt-0.5">{periodLabel}</p>
             </div>
-            <button onClick={() => navigate('/reports')} className="text-[12px] font-semibold text-blue-600 hover:text-blue-800">Full report →</button>
+            <button onClick={() => navigate('/bills')} className="text-[12px] font-semibold text-blue-600 hover:text-blue-800">Full report →</button>
           </div>
           <div className="overflow-y-auto flex-1 divide-y divide-gray-50">
             {providerSpend.length === 0 ? (
@@ -471,7 +472,7 @@ export default function Dashboard() {
                 <h2 className="font-bold text-gray-900">Contributions</h2>
                 <p className="text-xs text-gray-400 mt-0.5">{periodLabel}</p>
               </div>
-              <button onClick={() => navigate('/reports')} className="text-[12px] font-semibold text-blue-600 hover:text-blue-800">Details →</button>
+              <button onClick={() => navigate('/contributions')} className="text-[12px] font-semibold text-blue-600 hover:text-blue-800">Details →</button>
             </div>
             <div className="p-4 space-y-4">
               {memberSummaries.length === 0 ? (
@@ -517,7 +518,7 @@ export default function Dashboard() {
           </div>
 
           {/* Upcoming this month (only in month view) */}
-          {selectedPeriod === 'month' && (() => {
+          {selectedPeriod === 'this_month' && (() => {
             const upcoming = enrichedBills.filter(b => !b.tx && b.expectedDay >= todayDay && b.expectedDay <= todayDay + 7).sort((a, b) => a.expectedDay - b.expectedDay);
             if (upcoming.length === 0) return null;
             return (

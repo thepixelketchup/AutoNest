@@ -8,7 +8,7 @@ import {
   unlinkTransactionFromBill,
 } from '../services/billService';
 import { getHousehold } from '../services/householdService';
-
+import { useGlobalPeriod } from '../hooks/useGlobalPeriod';
 
 const MONTHS = [
   { v: 1, l: 'January' }, { v: 2, l: 'February' }, { v: 3, l: 'March' },
@@ -519,7 +519,7 @@ export default function Bills() {
   const [showRecurring, setShowRecurring] = useState(false);
   const [editBill, setEditBill] = useState(null);
   const [linkedTxsModal, setLinkedTxsModal] = useState(null); // bill.id (string) — resolved live at render
-  const [yearFilter, setYearFilter] = useState(String(thisYear));
+  const [yearFilter, setYearFilter] = useGlobalPeriod('this_month');
   const [provFilter, setProvFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
 

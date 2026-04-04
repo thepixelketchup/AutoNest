@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import { getTransactions, getMembers, updateTransaction } from '../services/billService';
 import { getHousehold } from '../services/householdService';
+import { useGlobalPeriod } from '../hooks/useGlobalPeriod';
 const isContributionTx = (tx) => tx.status === 'contribution' && tx.memberId;
 import { Card } from '../components/ui/Card';
 import { useToast } from '../hooks/useToast';
@@ -112,7 +113,7 @@ export default function Contributions() {
 
   // Filtering
   const [selectedMember, setSelectedMember] = useState('');
-  const [yearFilter, setYearFilter] = useState('all');
+  const [yearFilter, setYearFilter] = useGlobalPeriod('this_month');
 
   useEffect(() => {
     if (userProfile?.householdId) {
