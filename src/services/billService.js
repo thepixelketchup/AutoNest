@@ -27,6 +27,32 @@ export async function updateProvider(householdId, providerId, updates) {
   await setDoc(providerRef, updates, { merge: true });
 }
 
+export async function getMembers(householdId) {
+  const q = query(collection(db, 'Households', householdId, 'members'));
+  const querySnapshot = await getDocs(q);
+  return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+}
+
+export async function addMember(householdId, memberData) {
+  const newMemberRef = doc(collection(db, 'Households', householdId, 'members'));
+  const newMember = {
+    id: newMemberRef.id,
+    householdId,
+    ...memberData
+  };
+  await setDoc(newMemberRef, newMember);
+  return newMember;
+}
+
+export async function deleteMember(householdId, memberId) {
+  await deleteDoc(doc(db, 'Households', householdId, 'members', memberId));
+}
+
+export async function updateMember(householdId, memberId, updates) {
+  const memberRef = doc(db, 'Households', householdId, 'members', memberId);
+  await setDoc(memberRef, updates, { merge: true });
+}
+
 export async function getGeneratedBills(householdId, month, year) {
   let q = query(collection(db, 'Households', householdId, 'bills'));
   if (month && year) {

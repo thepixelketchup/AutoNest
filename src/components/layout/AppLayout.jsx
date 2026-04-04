@@ -11,6 +11,7 @@ export default function AppLayout() {
     { name: 'Transactions', path: '/transactions' },
     { name: 'Import Statement', path: '/imports' },
     { name: 'Providers', path: '/providers' },
+    { name: 'Members', path: '/members' },
   ];
 
   return (

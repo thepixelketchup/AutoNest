@@ -22,7 +22,7 @@ function parseAmount(amountStr) {
   return parseFloat(str) || 0;
 }
 
-export function MatchingEngine({ importedData, providers, unpaidBills, onComplete }) {
+export function MatchingEngine({ importedData, providers, members, unpaidBills, onComplete }) {
   const [unmatchedPending, setUnmatchedPending] = useState([]);
   const [unmatchedImported, setUnmatchedImported] = useState([]);
   const [autoMatches, setAutoMatches] = useState([]);
@@ -39,15 +39,31 @@ export function MatchingEngine({ importedData, providers, unpaidBills, onComplet
     
     // Attempt auto-match
     remainingImported.forEach((tx, idx) => {
+       const amountFloat = parseAmount(tx.amount);
+       const searchSpace = `${tx.name || ''} ${tx.rawBankDescription || ''}`.toLowerCase();
+
+       // Handle Income/Deposits -> Sweep against Members
+       if (amountFloat > 0 && members) {
+          const matchedMember = members.find(m => {
+             const baseNameMatch = m.name && searchSpace.includes(m.name.toLowerCase());
+             const kwMatch = m.matchKeywords && Array.isArray(m.matchKeywords) && m.matchKeywords.length > 0 
+                ? m.matchKeywords.some(kw => searchSpace.includes(kw.trim().toLowerCase()))
+                : false;
+             return baseNameMatch || kwMatch;
+          });
+
+          if (matchedMember) {
+             auto.push({ isContribution: true, matchObj: matchedMember, tx, originalIdx: idx });
+          }
+          return; // Stop processing liabilities since this is a deposit
+       }
+
+       // Handle Liabilities/Debits -> Sweep against Providers
        const matchedProvider = providers.find(p => {
-          if (!tx.name) return false;
-          const searchSpace = `${tx.name} ${tx.rawBankDescription || ''}`.toLowerCase();
-          
           const baseNameMatch = p.name && searchSpace.includes(p.name.toLowerCase());
           const kwMatch = p.matchKeywords && Array.isArray(p.matchKeywords) && p.matchKeywords.length > 0 
               ? p.matchKeywords.some(kw => searchSpace.includes(kw.trim().toLowerCase()))
               : false;
-              
           return baseNameMatch || kwMatch;
        });
        
@@ -60,7 +76,7 @@ export function MatchingEngine({ importedData, providers, unpaidBills, onComplet
           const targetBillIdx = workingUnpaid.findIndex(b => b.providerId === matchedProvider.id && b.month === txMonth && b.year === txYear);
           if (targetBillIdx !== -1) {
              const targetBill = workingUnpaid[targetBillIdx];
-             auto.push({ provider: matchedProvider, bill: targetBill, tx, originalIdx: idx });
+             auto.push({ isContribution: false, matchObj: targetBill, provider: matchedProvider, tx, originalIdx: idx });
              
              // Remove it from workingUnpaid so multiple missed rents map properly in chronological order!
              workingUnpaid.splice(targetBillIdx, 1);
@@ -76,27 +92,52 @@ export function MatchingEngine({ importedData, providers, unpaidBills, onComplet
     setUnmatchedImported(remainingImported);
   }, [importedData, providers, unpaidBills]);
 
-  const prepareTransaction = (bill, tx) => {
+  const prepareTransaction = (matchObj, tx, isContribution = false) => {
     const rawAmt = parseAmount(tx.amount);
     const actualAmount = Math.abs(rawAmt) || 0;
-    const isVariance = actualAmount > bill.expectedAmount;
+    
+    let billId = null;
+    let memberId = null;
+    let status = 'cleared';
+    let varianceReason = '';
 
-    let parsedMonth = bill.month || (new Date().getMonth() + 1);
-    let parsedYear = bill.year || new Date().getFullYear();
+    if (isContribution) {
+       memberId = matchObj.id;
+       status = 'contribution';
+    } else {
+       billId = matchObj.id;
+       const isVariance = actualAmount > matchObj.expectedAmount;
+       varianceReason = isVariance ? 'Auto-Sweep Variance' : '';
+    }
+
+    let parsedMonth = new Date().getMonth() + 1;
+    let parsedYear = new Date().getFullYear();
     const effectiveDate = tx.dateStr || tx.date;
+    const txD = new Date(effectiveDate);
+    if (!isNaN(txD.getTime())) {
+       parsedMonth = txD.getMonth() + 1;
+       parsedYear = txD.getFullYear();
+    }
+
+    // Attempt to explicitly map liability date logic back to what it swept against securely
+    if (!isContribution && matchObj.month && matchObj.year) {
+       parsedMonth = matchObj.month;
+       parsedYear = matchObj.year;
+    }
 
     return {
       id: tx.id || (crypto.randomUUID ? crypto.randomUUID() : 'tx_' + Date.now() + Math.random()),
       householdId: userProfile.householdId,
-      billId: bill.id,
+      billId,
+      memberId,
       month: parsedMonth,
       year: parsedYear,
       dateStr: effectiveDate,
       name: tx.name,
       amount: tx.amount,
-      status: 'cleared',
-      actualAmount: actualAmount,
-      varianceReason: isVariance ? 'Auto-Sweep Variance' : '',
+      status,
+      actualAmount,
+      varianceReason,
       source: tx.source || 'csv',
       rawBankDescription: tx.rawBankDescription || '',
       rawJson: tx.rawJson || ''
@@ -105,7 +146,7 @@ export function MatchingEngine({ importedData, providers, unpaidBills, onComplet
 
   const handleApproveAuto = (index) => {
     const match = autoMatches[index];
-    const preparedTx = prepareTransaction(match.bill, match.tx);
+    const preparedTx = prepareTransaction(match.matchObj, match.tx, match.isContribution);
     
     setApprovedTransactions(prev => [...prev, preparedTx]);
     
@@ -181,15 +222,23 @@ export function MatchingEngine({ importedData, providers, unpaidBills, onComplet
               <div key={i} className="flex flex-col md:flex-row items-center justify-between bg-white px-5 py-4 border border-blue-100 rounded-lg shadow-sm">
                 <div className="flex items-center space-x-6 flex-1 w-full md:w-auto mb-4 md:mb-0">
                   <div className="flex-1">
-                    <p className="text-sm font-semibold text-gray-900">{match.provider.name} <span className="font-medium text-gray-500">[{match.bill.year}-{String(match.bill.month).padStart(2,'0')}]</span></p>
-                    <p className="text-xs font-medium text-gray-500 mt-0.5">Template Expected: €{match.bill.expectedAmount.toFixed(2)}</p>
+                    <p className="text-sm font-semibold text-gray-900">{match.provider?.name || 'Contribution'} <span className="font-medium text-gray-500">{match.matchObj.month ? `[${match.matchObj.year}-${String(match.matchObj.month).padStart(2,'0')}]` : ''}</span></p>
+                    <p className="text-xs font-medium text-gray-500 mt-0.5">{match.matchObj.expectedAmount ? `Template Expected: €${match.matchObj.expectedAmount.toFixed(2)}` : ''}</p>
                   </div>
-                  <div className="text-blue-300 hidden md:block">
-                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>
+                  <div className="flex items-center justify-center bg-indigo-50 text-indigo-600 rounded-full w-10 h-10 shrink-0 font-bold hidden sm:flex">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
                   </div>
-                  <div className="flex-1">
-                    <p className="text-sm font-semibold text-gray-900 truncate" title={match.tx.name}>{match.tx.name}</p>
-                    <p className="text-xs font-medium text-gray-500 mt-0.5">Scanned Act: {match.tx.amount} on {match.tx.dateStr || match.tx.date}</p>
+                  <div>
+                    {match.isContribution ? (
+                       <p className="font-bold text-gray-900 border-b border-indigo-200 pb-1 mb-1">
+                          Mapped Income to <span className="text-green-600 font-black">{match.matchObj.name}</span>
+                       </p>
+                    ) : (
+                       <p className="font-bold text-gray-900 border-b border-indigo-200 pb-1 mb-1">
+                          Mapped to <span className="text-indigo-600 font-extrabold">{match.provider.name}</span>
+                       </p>
+                    )}
+                    <p className="flex items-center text-sm font-medium text-gray-500 space-x-1">Scanned Act: {match.tx.amount} on {match.tx.dateStr || match.tx.date}</p>
                   </div>
                 </div>
                 <Button onClick={() => handleApproveAuto(i)} variant="primary" className="w-full md:w-auto py-2 px-6 shadow-sm">Approve Matching</Button>

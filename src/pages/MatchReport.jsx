@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
-import { getProviders, getGeneratedBills, generateDueBills, getTransactions } from '../services/billService';
+import { getProviders, getMembers, getGeneratedBills, generateDueBills, getTransactions } from '../services/billService';
 import { useToast } from '../hooks/useToast';
 
 export default function MatchReport() {
@@ -13,6 +13,7 @@ export default function MatchReport() {
    const [availableYears, setAvailableYears] = useState([new Date().getFullYear()]);
    const [monthReports, setMonthReports] = useState([]);
    const [providerReports, setProviderReports] = useState([]);
+   const [memberReports, setMemberReports] = useState([]);
 
    useEffect(() => {
       if (userProfile?.householdId) {
@@ -24,10 +25,11 @@ export default function MatchReport() {
       try {
          setLoading(true);
          await generateDueBills(userProfile.householdId);
-         const [fetchedProviders, fetchedBills, fetchedTxs] = await Promise.all([
+         const [fetchedProviders, fetchedBills, fetchedTxs, fetchedMembers] = await Promise.all([
             getProviders(userProfile.householdId),
-            getGeneratedBills(userProfile.householdId), // No month/year fetches all globally
-            getTransactions(userProfile.householdId) 
+            getGeneratedBills(userProfile.householdId),
+            getTransactions(userProfile.householdId),
+            getMembers(userProfile.householdId)
          ]);
 
          const now = new Date();
@@ -165,6 +167,22 @@ export default function MatchReport() {
 
          setMonthReports(generatedReports);
          setProviderReports(filteredProviderReports);
+
+         // 5. Build Member/Contribution reports — strictly filter status='contribution' with a valid memberId
+         const contributionTxs = fetchedTxs.filter(t => t.status === 'contribution' && t.memberId && !t.billId);
+         const generatedMemberReports = fetchedMembers.map(member => {
+            const memberTxs = contributionTxs.filter(t => t.memberId === member.id);
+            const totalContributed = memberTxs.reduce((acc, t) => acc + (t.actualAmount || 0), 0);
+            return {
+               id: member.id,
+               name: member.name,
+               matchKeywords: member.matchKeywords,
+               totalContributed,
+               txs: memberTxs.sort((a, b) => new Date(b.dateStr) - new Date(a.dateStr))
+            };
+         }); // Show all members regardless of tx count
+
+         setMemberReports(generatedMemberReports);
       } catch (err) {
          addToast("Failed to compile reports.", "error");
       } finally {
@@ -200,10 +218,14 @@ export default function MatchReport() {
    }
 
    // Filter calculations for render time (preventing heavy database refetches)
-   const filteredMonthReports = monthReports.filter(r => r.year === parseInt(selectedYear, 10));
+   const filteredMonthReports = selectedYear === 'All' 
+      ? monthReports 
+      : monthReports.filter(r => r.year === parseInt(selectedYear, 10));
 
    const displayProviderReports = providerReports.map(pr => {
-      const filteredLedger = pr.ledger.filter(b => b.year === parseInt(selectedYear, 10));
+      const filteredLedger = selectedYear === 'All' 
+         ? pr.ledger 
+         : pr.ledger.filter(b => b.year === parseInt(selectedYear, 10));
       return {
          ...pr,
          ledger: filteredLedger,
@@ -226,6 +248,7 @@ export default function MatchReport() {
                   value={selectedYear}
                   onChange={(e) => setSelectedYear(e.target.value)}
                >
+                  <option value="All">All Years</option>
                   {availableYears.map(yr => (
                      <option key={yr} value={yr}>{yr}</option>
                   ))}
@@ -243,11 +266,17 @@ export default function MatchReport() {
                >
                   Provider View
                </button>
+               <button 
+                  onClick={() => setViewMode('contributions')}
+                  className={`px-5 py-2 rounded-lg text-sm font-semibold transition-all ${viewMode === 'contributions' ? 'bg-white text-green-700 shadow-sm border border-gray-200/60' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}
+               >
+                  Contributions
+               </button>
             </div>
          </header>
 
          <div className="space-y-8">
-            {viewMode === 'month' ? filteredMonthReports.map((report) => (
+          {viewMode === 'month' && filteredMonthReports.map((report) => (
                <div key={report.key} className="bg-white rounded-[12px] border border-gray-200 overflow-hidden">
                   <div className="px-6 py-5 flex items-center justify-between bg-white border-b border-gray-100">
                      <div className="flex items-center space-x-3">
@@ -345,7 +374,9 @@ export default function MatchReport() {
                      </div>
                   </div>
                </div>
-            )) : displayProviderReports.map((providerState) => (
+            ))}
+
+            {viewMode === 'provider' && displayProviderReports.map((providerState) => (
                 <div key={providerState.id} className="bg-white rounded-[12px] border border-gray-200 overflow-hidden">
                    <div className="px-6 py-5 flex items-center justify-between bg-white border-b border-gray-100">
                       <div className="flex items-center space-x-3">
@@ -379,7 +410,7 @@ export default function MatchReport() {
                                      <div className="text-[11px] font-medium text-gray-400 uppercase tracking-widest">Expected</div>
                                      <div className="text-[11px] font-medium text-gray-400 uppercase tracking-widest">Actual</div>
                                   </div>
-                                  <div className="text-[11px] font-medium text-gray-400 uppercase tracking-widest text-center">Status</div>
+                                  <div className="text-[11px] font-medium text-gray-400 uppercase tracking-widests text-center">Status</div>
                                   <div className="text-[11px] font-medium text-gray-400 uppercase tracking-widest text-right pr-5">Transaction Match</div>
                                </div>
                                
@@ -424,6 +455,108 @@ export default function MatchReport() {
                 </div>
             ))}
          </div>
+
+         {/* === CONTRIBUTIONS VIEW === */}
+         {viewMode === 'contributions' && (
+            <div className="space-y-6">
+               {memberReports.length === 0 ? (
+                  <div className="py-16 text-center text-gray-500 bg-white rounded-[12px] border border-gray-200">
+                     <svg className="w-12 h-12 text-gray-300 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                     <p className="font-semibold text-lg text-gray-800">No Members configured</p>
+                     <p className="text-sm mt-1">Go to Members to add contributors and import their transactions.</p>
+                  </div>
+               ) : memberReports.map(mr => {
+                  // Filter contributions by year, status, and memberId
+                  const filteredTxs = selectedYear === 'All' 
+                     ? mr.txs.filter(t => t.status === 'contribution' && t.memberId === mr.id)
+                     : mr.txs.filter(t => {
+                          const d = new Date(t.dateStr);
+                          const yearMatch = !isNaN(d.getTime()) ? d.getFullYear() === parseInt(selectedYear, 10) : t.year === parseInt(selectedYear, 10);
+                          return yearMatch && t.status === 'contribution' && t.memberId === mr.id;
+                       });
+                  const totalForYear = filteredTxs.reduce((acc, t) => acc + (t.actualAmount || 0), 0);
+                  return (
+                     <div key={mr.id} className="bg-white rounded-[12px] border border-gray-200 overflow-hidden">
+                        <div className="px-6 py-5 flex items-center justify-between bg-white border-b border-gray-100">
+                           <div className="flex items-center space-x-3">
+                              <span className="flex items-center justify-center bg-green-100 text-green-700 rounded-lg w-10 h-10 font-black text-lg shrink-0">{mr.name.charAt(0).toUpperCase()}</span>
+                              <div>
+                                 <h2 className="text-[18px] font-bold text-slate-800 tracking-tight">{mr.name}</h2>
+                                 <p className="text-xs text-gray-400 mt-0.5">Keywords: {mr.matchKeywords?.join(', ') || 'None configured'}</p>
+                              </div>
+                           </div>
+                           <div className="flex items-center space-x-6">
+                              <div className="text-right">
+                                 <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-400">Total Contributed</p>
+                                 <p className="text-[22px] font-black text-green-600 tracking-tight">€ {totalForYear.toFixed(2)}</p>
+                              </div>
+                              <div className="text-right">
+                                 <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-400">Transactions</p>
+                                 <p className="text-[22px] font-black text-slate-700 tracking-tight">{filteredTxs.length}</p>
+                              </div>
+                           </div>
+                        </div>
+                        <div className="bg-white overflow-x-auto rounded-b-[12px]">
+                           <div className="min-w-[500px] divide-y divide-gray-100">
+                              {filteredTxs.length === 0 ? (
+                                 <div className="py-10 text-center text-gray-400 text-sm italic">No contributions recorded for the selected period.</div>
+                              ) : (
+                                 <>
+                                    {/* Table Header — 4 columns */}
+                                    <div className="py-3 px-6 gap-6 items-center bg-gray-50/50 border-b border-gray-100" style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 0.9fr) minmax(150px, 1.3fr) minmax(100px, 0.8fr) minmax(220px, 2fr)' }}>
+                                       <div className="text-[11px] font-medium text-gray-400 uppercase tracking-widest">Date</div>
+                                       <div className="text-[11px] font-medium text-gray-400 uppercase tracking-widest">Counterparty</div>
+                                       <div className="text-[11px] font-medium text-gray-400 uppercase tracking-widest text-right pr-2">Amount</div>
+                                       <div className="text-[11px] font-medium text-gray-400 uppercase tracking-widest text-right pr-5">Bank Reference</div>
+                                    </div>
+                                    {filteredTxs.map(tx => {
+                                       const txDate = tx.dateStr ? new Date(tx.dateStr) : null;
+                                       const dateLabel = txDate && !isNaN(txDate.getTime())
+                                          ? txDate.toLocaleString('default', { day: '2-digit', month: 'short', year: 'numeric' })
+                                          : (tx.dateStr || `${tx.month}/${tx.year}`);
+                                       const isDeduction = (tx.actualAmount || 0) < 0;
+                                       return (
+                                          <div key={tx.id} className="py-5 px-6 gap-6 items-center" style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 0.9fr) minmax(150px, 1.3fr) minmax(100px, 0.8fr) minmax(220px, 2fr)' }}>
+                                             {/* Date */}
+                                             <div>
+                                                <h4 className="text-[15px] font-bold text-slate-800 tracking-tight">{dateLabel}</h4>
+                                             </div>
+                                             {/* Counterparty */}
+                                             <div>
+                                                <p className="text-[15px] font-semibold text-slate-700 truncate" title={tx.name}>{tx.name}</p>
+                                                {tx.rawBankDescription && (
+                                                   <p className="text-[12px] text-gray-400 mt-0.5 truncate italic" title={tx.rawBankDescription}>{tx.rawBankDescription}</p>
+                                                )}
+                                             </div>
+                                             {/* Amount — green deposit, red deduction */}
+                                             <div className="flex justify-end pr-2">
+                                                <span className={`text-[15px] font-black tracking-tight ${isDeduction ? 'text-red-500' : 'text-green-600'}`}>
+                                                   {isDeduction ? '− ' : '+ '}€ {Math.abs(tx.actualAmount || 0).toFixed(2)}
+                                                </span>
+                                             </div>
+                                             {/* Bank Reference gray box */}
+                                             <div className="flex justify-end w-full">
+                                                <div className="bg-[#f8fafc] rounded-md text-[13px] py-3 px-4 w-full flex justify-between items-center text-gray-700 border border-transparent shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
+                                                   <span className="font-mono tracking-tight text-gray-500 truncate pr-3" title={tx.rawBankDescription || tx.name}>
+                                                      {tx.rawBankDescription || tx.name}
+                                                   </span>
+                                                   <span className={`font-mono font-bold tracking-tight whitespace-nowrap ${isDeduction ? 'text-red-500' : 'text-slate-700'}`}>
+                                                      {tx.amount}
+                                                   </span>
+                                                </div>
+                                             </div>
+                                          </div>
+                                       );
+                                    })}
+                                 </>
+                              )}
+                           </div>
+                        </div>
+                     </div>
+                  );
+               })}
+            </div>
+         )}
       </div>
    );
 }

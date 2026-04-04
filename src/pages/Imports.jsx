@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { getProviders, getGeneratedBills, getTransactions, saveBulkTransactions, generateDueBills } from '../services/billService';
+import { getProviders, getMembers, getGeneratedBills, getTransactions, saveBulkTransactions, generateDueBills } from '../services/billService';
 import { CsvUploader } from '../components/imports/CsvUploader';
 import { ColumnMapper } from '../components/imports/ColumnMapper';
 import { MatchingEngine } from '../components/imports/MatchingEngine';
@@ -17,6 +17,7 @@ export default function Imports() {
   const [rawCsvData, setRawCsvData] = useState([]);
   const [csvFields, setCsvFields] = useState([]);
   const [allProviders, setAllProviders] = useState([]);
+  const [allMembers, setAllMembers] = useState([]);
   const [unpaidBills, setUnpaidBills] = useState([]);
   const [allBills, setAllBills] = useState([]);
 
@@ -49,6 +50,7 @@ export default function Imports() {
       setLoadingBills(true);
       await generateDueBills(userProfile.householdId);
       const providers = await getProviders(userProfile.householdId);
+      const members = await getMembers(userProfile.householdId);
       const generatedBills = await getGeneratedBills(userProfile.householdId);
       const allTxs = await getTransactions(userProfile.householdId);
 
@@ -65,6 +67,8 @@ export default function Imports() {
       });
 
       setAllProviders(providers);
+      setAllMembers(members);
+      setAllBills(generatedBills);
       setUnpaidBills(unpaid);
     } catch (e) {
       addToast("Failed to fetch pending bills.", "error");
@@ -158,6 +162,7 @@ export default function Imports() {
             <MatchingEngine 
             importedData={mappedData} 
             providers={allProviders}
+            members={allMembers}
             unpaidBills={unpaidBills} 
             onComplete={handleComplete} 
           />)

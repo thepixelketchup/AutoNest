@@ -10,6 +10,7 @@ import Onboarding from './pages/Onboarding';
 import Imports from './pages/Imports';
 import Transactions from './pages/Transactions';
 import Providers from './pages/Providers';
+import Members from './pages/Members';
 import MatchReport from './pages/MatchReport';
 
 function App() {
@@ -40,6 +41,7 @@ function App() {
             <Route path="/reports" element={<MatchReport />} />
             <Route path="/imports" element={<Imports />} />
             <Route path="/providers" element={<Providers />} />
+            <Route path="/members" element={<Members />} />
           </Route>
         </Routes>
       </Router>
