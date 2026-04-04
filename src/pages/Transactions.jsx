@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import {
   getTransactions, getProviders, getMembers, getBills,
@@ -559,6 +560,7 @@ function SweepStepModal({ proposal, stepNum, totalSteps, allBills, providers, me
 export default function Transactions() {
   const { userProfile } = useAuth();
   const { addToast }    = useToast();
+  const navigate        = useNavigate();
 
   const [transactions, setTransactions] = useState([]);
   const [providers,    setProviders]    = useState([]);
@@ -894,6 +896,10 @@ export default function Transactions() {
               Auto-Sweep
             </button>
           )}
+          <button onClick={() => navigate('/imports')} className="flex items-center gap-2 px-5 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl text-sm font-bold hover:bg-gray-50 transition shadow-sm">
+            <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+            Import Statement
+          </button>
         </div>
       </header>
 

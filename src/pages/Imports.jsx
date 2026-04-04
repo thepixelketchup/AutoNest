@@ -1,25 +1,27 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { getProviders, getMembers, getBills, getTransactions, saveBulkTransactions } from '../services/billService';
+import { getTransactions, saveBulkTransactions } from '../services/billService';
 import { CsvUploader } from '../components/imports/CsvUploader';
 import { ColumnMapper } from '../components/imports/ColumnMapper';
-import { MatchingEngine } from '../components/imports/MatchingEngine';
 import { useToast } from '../hooks/useToast';
+
+function parseAmount(str) {
+  if (!str) return 0;
+  let s = str.toString().trim().replace(/[^0-9.,-]/g, '');
+  const lc = s.lastIndexOf(','), ld = s.lastIndexOf('.');
+  if (lc > ld) s = s.replace(/\./g, '').replace(/,/g, '.');
+  else if (ld > lc) s = s.replace(/,/g, '');
+  return parseFloat(s) || 0;
+}
 
 export default function Imports() {
   const { userProfile } = useAuth();
   const { addToast } = useToast();
   const navigate = useNavigate();
   const [step, setStep] = useState(1); // 1: Upload, 2: Mapping, 3: Match Engine
-  const [loadingBills, setLoadingBills] = useState(false);
-
   const [rawCsvData, setRawCsvData] = useState([]);
   const [csvFields, setCsvFields] = useState([]);
-  const [allProviders, setAllProviders] = useState([]);
-  const [allMembers, setAllMembers] = useState([]);
-  const [bills, setBills] = useState([]);   // all manually created bills
-
   const [mappedData, setMappedData] = useState([]);
 
   const [lastUploadDate, setLastUploadDate] = useState('');
@@ -38,31 +40,6 @@ export default function Imports() {
     }
   }, [step, userProfile?.householdId]);
 
-  useEffect(() => {
-    if (step === 3 && userProfile?.householdId) {
-      fetchBills();
-    }
-  }, [step, userProfile?.householdId]);
-
-  async function fetchBills() {
-    try {
-      setLoadingBills(true);
-      const [providers, members, allBills] = await Promise.all([
-        getProviders(userProfile.householdId),
-        getMembers(userProfile.householdId),
-        getBills(userProfile.householdId),
-      ]);
-      // Pass only non-cleared bills for sweep suggestions
-      const activeBills = allBills.filter(b => b.status !== 'cleared');
-      setAllProviders(providers);
-      setAllMembers(members);
-      setBills(activeBills);
-    } catch {
-      addToast('Failed to fetch bills.', 'error');
-    } finally {
-      setLoadingBills(false);
-    }
-  }
 
   const handleUpload = (data, fields) => {
     setRawCsvData(data);
@@ -98,15 +75,24 @@ export default function Imports() {
     setStep(3);
   };
 
-  const handleComplete = async (finalTransactions) => {
+  const handleComplete = async (rawMappings) => {
     try {
-      if (finalTransactions && finalTransactions.length > 0) {
+      if (rawMappings && rawMappings.length > 0) {
+        const finalTransactions = rawMappings.map(tx => ({
+          ...tx,
+          id: tx.id || crypto.randomUUID(),
+          status: 'unmatched',
+          billId: null,
+          billIds: [],
+          memberId: null,
+          source: 'csv'
+        }));
         await saveBulkTransactions(userProfile.householdId, finalTransactions);
       }
       setStep(1);
       setRawCsvData([]);
       setMappedData([]);
-      addToast(`Successfully imported ${finalTransactions?.length || 0} transactions!`, 'success');
+      addToast(`Successfully imported ${rawMappings?.length || 0} transactions!`, 'success');
       navigate('/transactions');
     } catch (e) {
       addToast("Failed to save imported transactions.", "error");
@@ -135,7 +121,7 @@ export default function Imports() {
         </div>
         <div className={`flex flex-col items-center ${step >= 3 ? 'text-blue-600' : 'text-gray-400'}`}>
           <div className={`flex items-center justify-center w-10 h-10 rounded-full font-bold border-2 bg-white ${step >= 3 ? 'border-blue-600' : 'border-gray-300'}`}>3</div>
-          <span className="text-xs font-semibold mt-2 absolute -bottom-6">Match</span>
+          <span className="text-xs font-semibold mt-2 absolute -bottom-6">Review</span>
         </div>
       </div>
 
@@ -143,16 +129,47 @@ export default function Imports() {
         {step === 1 && <CsvUploader onUpload={handleUpload} lastUploadDate={lastUploadDate} />}
         {step === 2 && <ColumnMapper data={rawCsvData} fields={csvFields} onMapped={handleMapped} />}
         {step === 3 && (
-          loadingBills ? (
-            <div className="flex justify-center items-center h-64 text-blue-600 animate-pulse font-medium">Running Smart Match Engine...</div>
-          ) : (
-            <MatchingEngine 
-            importedData={mappedData} 
-            providers={allProviders}
-            members={allMembers}
-            bills={bills}
-            onComplete={handleComplete} 
-          />)
+          <div className="bg-white rounded-2xl shadow p-6 flex flex-col">
+            <div className="mb-6">
+              <h2 className="text-xl font-black text-gray-900">Review Transactions</h2>
+              <p className="text-sm font-medium text-gray-500 mt-1">{mappedData.length} records parsed successfully.</p>
+            </div>
+            
+            <div className="overflow-y-auto max-h-[500px] border border-gray-100 rounded-xl mb-6">
+              <table className="w-full text-left border-collapse">
+                <thead className="bg-gray-50 sticky top-0">
+                  <tr>
+                    <th className="px-5 py-3 text-[11px] font-bold text-gray-500 uppercase">Date</th>
+                    <th className="px-5 py-3 text-[11px] font-bold text-gray-500 uppercase">Description</th>
+                    <th className="px-5 py-3 text-[11px] font-bold text-gray-500 uppercase text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {mappedData.map((tx, idx) => {
+                    const amt = parseAmount(tx.amount);
+                    return (
+                      <tr key={idx} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-5 py-3 text-sm text-gray-500 whitespace-nowrap">{tx.dateStr || tx.date}</td>
+                        <td className="px-5 py-3 text-sm font-semibold text-gray-800 break-all">{tx.name}</td>
+                        <td className={`px-5 py-3 text-sm font-black text-right whitespace-nowrap ${amt < 0 ? 'text-red-500' : 'text-green-600'}`}>
+                           {amt < 0 ? '− ' : ''}€{Math.abs(amt).toFixed(2)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex justify-end pt-4 border-t border-gray-100">
+              <button 
+                onClick={() => handleComplete(mappedData)} 
+                className="px-6 py-2.5 bg-blue-600 text-white rounded-xl font-bold shadow-md hover:bg-blue-700 transition"
+              >
+                Confirm & Save
+              </button>
+            </div>
+          </div>
         )}
       </div>
     </div>
