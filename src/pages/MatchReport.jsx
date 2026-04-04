@@ -8,7 +8,9 @@ export default function MatchReport() {
    const { addToast } = useToast();
 
    const [loading, setLoading] = useState(true);
-   const [reports, setReports] = useState([]);
+   const [viewMode, setViewMode] = useState('month'); 
+   const [monthReports, setMonthReports] = useState([]);
+   const [providerReports, setProviderReports] = useState([]);
 
    useEffect(() => {
       if (userProfile?.householdId) {
@@ -94,9 +96,59 @@ export default function MatchReport() {
             };
          });
 
-         setReports(generatedReports);
+         // 4. Populate report object per provider
+         const generatedProviderReports = fetchedProviders.map(provider => {
+            const providerBills = fetchedBills.filter(b => b.providerId === provider.id);
+            providerBills.sort((a,b) => b.year !== a.year ? b.year - a.year : b.month - a.month);
+            
+            const ledger = providerBills.map(bill => {
+               const relevantTxs = fetchedTxs.filter(t => t.billId === bill.id && t.status === 'cleared');
+               const sumPaid = relevantTxs.reduce((acc, t) => acc + (t.actualAmount || 0), 0);
+
+               let status = 'Pending';
+               if (sumPaid > 0) {
+                  if (sumPaid >= bill.expectedAmount * 0.95) status = 'Paid'; 
+                  else status = 'Partial';
+               } else {
+                  const currentM = now.getMonth() + 1;
+                  const currentY = now.getFullYear();
+                  if (bill.year < currentY || (bill.year === currentY && bill.month < currentM)) {
+                     status = 'Missed';
+                  }
+               }
+
+               return { 
+                  ...bill, 
+                  tx: relevantTxs.length > 0 ? relevantTxs[0] : null, 
+                  actualPaid: sumPaid, 
+                  reportStatus: status,
+                  label: new Date(bill.year, bill.month - 1).toLocaleString('default', { month: 'long', year: 'numeric' })
+               };
+            });
+
+            const expectedSum = ledger.reduce((acc, b) => acc + b.expectedAmount, 0);
+            const paidSum = ledger.reduce((acc, b) => acc + b.actualPaid, 0);
+            const missedCount = ledger.filter(b => b.reportStatus === 'Missed').length;
+
+            return {
+               id: provider.id,
+               name: provider.name,
+               category: provider.category,
+               paymentMethod: provider.paymentMethod,
+               expectedSum,
+               paidSum,
+               missedCount,
+               ledger
+            };
+         });
+         
+         const filteredProviderReports = generatedProviderReports.filter(pr => pr.ledger.length > 0);
+         filteredProviderReports.sort((a,b) => a.name.localeCompare(b.name));
+
+         setMonthReports(generatedReports);
+         setProviderReports(filteredProviderReports);
       } catch (err) {
-         addToast("Failed to compile match reports.", "error");
+         addToast("Failed to compile reports.", "error");
       } finally {
          setLoading(false);
       }
@@ -120,7 +172,7 @@ export default function MatchReport() {
       }
    };
 
-   if (loading && reports.length === 0) {
+   if (loading && monthReports.length === 0) {
       return (
          <div className="flex flex-col items-center justify-center min-h-[60vh] text-gray-500">
             <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600 mb-4"></div>
@@ -131,15 +183,29 @@ export default function MatchReport() {
 
    return (
       <div className="p-4 md:p-8 max-w-[1280px] mx-auto space-y-6">
-         <header className="flex justify-between items-center mb-6 mt-2 md:mt-0">
+         <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 mt-2 md:mt-0 gap-4">
             <div>
-               <h1 className="text-xl font-bold text-gray-900">Match & Report</h1>
-               <p className="text-gray-500 text-sm mt-1">Check which bills are paid, missed, or partially paid month by month.</p>
+               <h1 className="text-xl font-bold text-gray-900">Reports</h1>
+               <p className="text-gray-500 text-sm mt-1">Check which bills are paid, missed, or partially paid.</p>
+            </div>
+            <div className="flex bg-gray-100 p-1.5 rounded-xl border border-gray-200">
+               <button 
+                  onClick={() => setViewMode('month')}
+                  className={`px-5 py-2 rounded-lg text-sm font-semibold transition-all ${viewMode === 'month' ? 'bg-white text-gray-900 shadow-sm border border-gray-200/60' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}
+               >
+                  Month View
+               </button>
+               <button 
+                  onClick={() => setViewMode('provider')}
+                  className={`px-5 py-2 rounded-lg text-sm font-semibold transition-all ${viewMode === 'provider' ? 'bg-white text-gray-900 shadow-sm border border-gray-200/60' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}
+               >
+                  Provider View
+               </button>
             </div>
          </header>
 
          <div className="space-y-8">
-            {reports.map((report) => (
+            {viewMode === 'month' ? monthReports.map((report) => (
                <div key={report.key} className="bg-white rounded-[12px] border border-gray-200 overflow-hidden">
                   <div className="px-6 py-5 flex items-center justify-between bg-white border-b border-gray-100">
                      <div className="flex items-center space-x-3">
@@ -237,6 +303,74 @@ export default function MatchReport() {
                      </div>
                   </div>
                </div>
+            )) : providerReports.map((providerState) => (
+                <div key={providerState.id} className="bg-white rounded-[12px] border border-gray-200 overflow-hidden">
+                   <div className="px-6 py-5 flex items-center justify-between bg-white border-b border-gray-100">
+                      <div className="flex items-center space-x-3">
+                         <span className="flex items-center justify-center bg-blue-100 text-blue-700 rounded-lg w-10 h-10 font-bold shrink-0">{providerState.name.charAt(0).toUpperCase()}</span>
+                         <h2 className="text-[18px] font-bold text-slate-800 tracking-tight">{providerState.name}</h2>
+                      </div>
+                      <div className="flex items-center space-x-6 text-[15px] text-gray-600 whitespace-nowrap">
+                         <span className="shrink-0">Category: <strong className="text-gray-900 capitalize">{providerState.category || 'N/A'}</strong></span>
+                         <span className="shrink-0">Payment: <strong className="text-gray-900 capitalize">{providerState.paymentMethod || 'Manual'}</strong></span>
+                      </div>
+                   </div>
+                   <div className="bg-white overflow-x-auto rounded-b-[12px]">
+                      <div className="min-w-[850px] divide-y divide-gray-100">
+                         {providerState.ledger.length === 0 ? (
+                            <div className="p-8 text-center text-gray-400 text-sm font-medium">No active bills found for this provider.</div>
+                         ) : (
+                            <>
+                               {/* Table Header */}
+                               <div className="py-3 px-6 gap-6 items-center bg-gray-50/50 border-b border-gray-100" style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 1.5fr) minmax(140px, 1.2fr) minmax(130px, 1fr) minmax(280px, 2.5fr)' }}>
+                                  <div className="text-[11px] font-medium text-gray-400 uppercase tracking-widest">Billing Cycle</div>
+                                  <div className="grid grid-cols-2 gap-4">
+                                     <div className="text-[11px] font-medium text-gray-400 uppercase tracking-widest">Expected</div>
+                                     <div className="text-[11px] font-medium text-gray-400 uppercase tracking-widest">Actual</div>
+                                  </div>
+                                  <div className="text-[11px] font-medium text-gray-400 uppercase tracking-widest text-center">Status</div>
+                                  <div className="text-[11px] font-medium text-gray-400 uppercase tracking-widest text-right pr-5">Transaction Match</div>
+                               </div>
+                               
+                               {/* Row Rendering */}
+                               {providerState.ledger.map((bill) => (
+                                  <div key={bill.id} className="py-6 px-6 gap-6 items-center" style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 1.5fr) minmax(140px, 1.2fr) minmax(130px, 1fr) minmax(280px, 2.5fr)' }}>
+                                     <div>
+                                        <h4 className="text-[16px] font-bold text-slate-800 tracking-tight mb-1">{bill.label}</h4>
+                                     </div>
+                                     <div className="grid grid-cols-2 gap-4">
+                                        <div className="flex flex-col justify-center">
+                                           <span className="text-[14px] text-slate-800 font-bold">€ {bill.expectedAmount.toFixed(2)}</span>
+                                        </div>
+                                        <div className="flex flex-col justify-center">
+                                           <span className={`text-[14px] font-bold ${bill.actualPaid > 0 ? 'text-green-600' : 'text-gray-400'}`}>
+                                              {bill.actualPaid > 0 ? `€ ${bill.actualPaid.toFixed(2)}` : '€ 0.00'}
+                                           </span>
+                                        </div>
+                                     </div>
+                                     <div className="flex justify-center">
+                                        <span className={`flex items-center px-4 py-1.5 rounded-full text-[14px] tracking-wide ${getStatusStyle(bill.reportStatus).classes}`} style={getStatusStyle(bill.reportStatus).style}>
+                                           {getStatusIcon(bill.reportStatus)}
+                                           {bill.reportStatus}
+                                        </span>
+                                     </div>
+                                     <div className="flex justify-end w-full">
+                                        <div className="bg-[#f8fafc] rounded-md text-[14px] py-4 px-5 w-full flex justify-between items-center text-gray-700 border border-transparent shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
+                                           {bill.tx ? (
+                                              <>
+                                                 <span className="font-mono tracking-tight text-gray-600 pr-4 truncate">{bill.tx.dateStr || `${bill.tx.year}-${String(bill.tx.month).padStart(2, '0')}`} — {bill.tx.name || bill.tx.rawBankDescription}</span>
+                                                 <span className="font-mono font-bold tracking-tight whitespace-nowrap text-slate-700">€ {bill.actualPaid.toFixed(2)}</span>
+                                              </>
+                                           ) : <span className="text-gray-400 italic w-full text-center">No transaction matched.</span>}
+                                        </div>
+                                     </div>
+                                  </div>
+                               ))}
+                            </>
+                         )}
+                      </div>
+                   </div>
+                </div>
             ))}
          </div>
       </div>
