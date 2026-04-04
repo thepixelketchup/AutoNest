@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import { getProviders, getMembers, getBills, getTransactions, getBillPeriodMonthYear } from '../services/billService';
+import { getHousehold } from '../services/householdService';
+import { useGlobalPeriod } from '../hooks/useGlobalPeriod';
 import { useToast } from '../hooks/useToast';
 
 export default function MatchReport() {
@@ -9,11 +11,10 @@ export default function MatchReport() {
 
    const [loading, setLoading] = useState(true);
    const [viewMode, setViewMode] = useState('month'); 
-   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
-   const [availableYears, setAvailableYears] = useState([new Date().getFullYear()]);
+   const [selectedPeriod, setSelectedPeriod] = useGlobalPeriod('this_month');
+   const [household, setHousehold] = useState(null);
    const [monthReports, setMonthReports] = useState([]);
    const [providerReports, setProviderReports] = useState([]);
-   const [memberReports, setMemberReports] = useState([]);
 
    useEffect(() => {
       if (userProfile?.householdId) {
@@ -24,12 +25,13 @@ export default function MatchReport() {
    async function fetchReportData() {
       try {
          setLoading(true);
-         const [fetchedProviders, fetchedBills, fetchedTxs, fetchedMembers] = await Promise.all([
+         const [fetchedProviders, fetchedBills, fetchedTxs, hh] = await Promise.all([
             getProviders(userProfile.householdId),
             getBills(userProfile.householdId),
             getTransactions(userProfile.householdId),
-            getMembers(userProfile.householdId)
+            getHousehold(userProfile.householdId)
          ]);
+         setHousehold(hh);
 
          const now = new Date();
          const currentYear = now.getFullYear();
@@ -49,12 +51,6 @@ export default function MatchReport() {
          const currentMonthKey = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
          monthKeysSet.add(currentMonthKey);
 
-         const allYears = new Set(validBills.map(b => b._year).filter(Boolean));
-         allYears.add(currentYear);
-         const sortedYears = [...allYears].sort((a,b) => b - a);
-         setAvailableYears(sortedYears);
-         if (!sortedYears.includes(selectedYear)) setSelectedYear(sortedYears[0]);
-
          const monthKeys = [...monthKeysSet].sort((a, b) => b.localeCompare(a));
 
          // ── Month Reports ──────────────────────────────────────────────────────
@@ -67,13 +63,12 @@ export default function MatchReport() {
 
             const ledger = billsForMonth.map(bill => {
                const provider = fetchedProviders.find(p => p.id === bill.providerId);
-               // Many-to-many: find txs linked via billIds or legacy billId
                const relevantTxs = fetchedTxs.filter(t => {
                   if (t.status !== 'cleared') return false;
                   return (t.billIds && t.billIds.includes(bill.id)) || t.billId === bill.id;
                });
-               const sumPaid = relevantTxs.reduce((acc, t) => acc + (t.actualAmount || 0), 0);
-               const billAmt = bill.amount || 0;
+               const sumPaid = relevantTxs.reduce((acc, t) => acc + (t.billAmounts ? (t.billAmounts[bill.id] || 0) : Math.abs(t.actualAmount || 0)), 0);
+               const billAmt = (bill.amount || 0) + (bill.lateFee || 0);
 
                let status = 'Pending';
                if (sumPaid > 0) {
@@ -85,17 +80,17 @@ export default function MatchReport() {
 
                return {
                   ...bill,
-                  tx: relevantTxs.length > 0 ? relevantTxs[0] : null,
+                  txs: relevantTxs,
                   actualPaid: sumPaid,
                   reportStatus: status,
                   name: provider?.name || 'Unknown',
                   category: provider?.category || 'Uncategorized',
                   paymentMethod: provider?.paymentMethod || 'Direct Debit',
-                  expectedAmount: billAmt, // keep compat with rendering below
+                  expectedAmount: billAmt,
                };
             });
 
-            const expectedSum = ledger.reduce((acc, b) => acc + (b.amount || 0), 0);
+            const expectedSum = ledger.reduce((acc, b) => acc + b.expectedAmount, 0);
             const paidSum     = ledger.reduce((acc, b) => acc + b.actualPaid, 0);
             const missedCount = ledger.filter(b => b.reportStatus === 'Missed').length;
 
@@ -112,8 +107,8 @@ export default function MatchReport() {
                   if (t.status !== 'cleared') return false;
                   return (t.billIds && t.billIds.includes(bill.id)) || t.billId === bill.id;
                });
-               const sumPaid = relevantTxs.reduce((acc, t) => acc + (t.actualAmount || 0), 0);
-               const billAmt = bill.amount || 0;
+               const sumPaid = relevantTxs.reduce((acc, t) => acc + (t.billAmounts ? (t.billAmounts[bill.id] || 0) : Math.abs(t.actualAmount || 0)), 0);
+               const billAmt = (bill.amount || 0) + (bill.lateFee || 0);
 
                let status = 'Pending';
                if (sumPaid > 0) {
@@ -125,15 +120,15 @@ export default function MatchReport() {
 
                return {
                   ...bill,
-                  tx: relevantTxs.length > 0 ? relevantTxs[0] : null,
+                  txs: relevantTxs,
                   actualPaid: sumPaid,
                   reportStatus: status,
-                  expectedAmount: billAmt, // compat
+                  expectedAmount: billAmt,
                   label: new Date(bill._year, bill._month - 1).toLocaleString('default', { month: 'long', year: 'numeric' })
                };
             });
 
-            const expectedSum = ledger.reduce((acc, b) => acc + (b.amount || 0), 0);
+            const expectedSum = ledger.reduce((acc, b) => acc + b.expectedAmount, 0);
             const paidSum     = ledger.reduce((acc, b) => acc + b.actualPaid, 0);
             const missedCount = ledger.filter(b => b.reportStatus === 'Missed').length;
 
@@ -145,22 +140,6 @@ export default function MatchReport() {
 
          setMonthReports(generatedReports);
          setProviderReports(filteredProviderReports);
-
-         // 5. Build Member/Contribution reports — strictly filter status='contribution' with a valid memberId
-         const contributionTxs = fetchedTxs.filter(t => t.status === 'contribution' && t.memberId && !t.billId);
-         const generatedMemberReports = fetchedMembers.map(member => {
-            const memberTxs = contributionTxs.filter(t => t.memberId === member.id);
-            const totalContributed = memberTxs.reduce((acc, t) => acc + (t.actualAmount || 0), 0);
-            return {
-               id: member.id,
-               name: member.name,
-               matchKeywords: member.matchKeywords,
-               totalContributed,
-               txs: memberTxs.sort((a, b) => new Date(b.dateStr) - new Date(a.dateStr))
-            };
-         }); // Show all members regardless of tx count
-
-         setMemberReports(generatedMemberReports);
       } catch (err) {
          addToast("Failed to compile reports.", "error");
       } finally {
@@ -195,15 +174,35 @@ export default function MatchReport() {
       );
    }
 
-   // Filter calculations for render time (preventing heavy database refetches)
-   const filteredMonthReports = selectedYear === 'All' 
+   const currentYearInt = new Date().getFullYear();
+   const currentMonthInt = new Date().getMonth() + 1;
+   const startYrStr = household?.trackingStartDate;
+   let trackingStartYr = currentYearInt - 1; 
+   if (startYrStr && startYrStr.includes('-')) {
+     trackingStartYr = parseInt(startYrStr.split('-')[0], 10);
+   } else if (startYrStr) {
+     trackingStartYr = parseInt(startYrStr, 10);
+   }
+   const maxYear = Math.max(currentYearInt, trackingStartYr || currentYearInt);
+   const minYear = Math.min(currentYearInt, trackingStartYr || currentYearInt);
+   
+   const availableYears = [];
+   for (let y = maxYear; y >= minYear; y--) {
+     availableYears.push(y);
+   }
+
+   const isThisMonth = selectedPeriod === 'this_month';
+   const reportYear = isThisMonth ? currentYearInt : parseInt(selectedPeriod, 10);
+   const isAllYears = selectedPeriod === 'all';
+
+   const filteredMonthReports = isAllYears 
       ? monthReports 
-      : monthReports.filter(r => r.year === parseInt(selectedYear, 10));
+      : monthReports.filter(r => r.year === reportYear && (!isThisMonth || r.month === currentMonthInt));
 
    const displayProviderReports = providerReports.map(pr => {
-      const filteredLedger = selectedYear === 'All' 
+      const filteredLedger = isAllYears 
          ? pr.ledger 
-         : pr.ledger.filter(b => b.year === parseInt(selectedYear, 10));
+         : pr.ledger.filter(b => b._year === reportYear && (!isThisMonth || b._month === currentMonthInt));
       return {
          ...pr,
          ledger: filteredLedger,
@@ -217,39 +216,50 @@ export default function MatchReport() {
       <div className="p-4 md:p-8 max-w-[1280px] mx-auto space-y-6">
          <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 mt-2 md:mt-0 gap-4">
             <div>
-               <h1 className="text-xl font-bold text-gray-900">Reports</h1>
-               <p className="text-gray-500 text-sm mt-1">Check which bills are paid, missed, or partially paid.</p>
+               <h1 className="text-3xl font-black text-gray-900 tracking-tight">Reports</h1>
+               <p className="text-gray-400 text-sm mt-0.5">Audit bills and track exact history</p>
             </div>
-            <div className="flex bg-gray-100 p-1.5 rounded-xl border border-gray-200 gap-2 items-center pl-3">
-               <select 
-                  className="bg-transparent border-none text-slate-700 font-bold focus:ring-0 text-sm cursor-pointer mx-1"
-                  value={selectedYear}
-                  onChange={(e) => setSelectedYear(e.target.value)}
-               >
-                  <option value="All">All Years</option>
+            
+            <div className="flex items-center gap-3 flex-wrap">
+               <div className="flex bg-gray-100 border border-gray-200 rounded-xl p-1 gap-1 flex-wrap">
+                  <button
+                     onClick={() => setSelectedPeriod('this_month')}
+                     className={`px-3 py-1.5 rounded-lg text-sm font-bold transition-all ${selectedPeriod === 'this_month' ? 'bg-white shadow text-blue-700' : 'text-gray-500 hover:text-gray-700'}`}
+                  >
+                     This Month
+                  </button>
                   {availableYears.map(yr => (
-                     <option key={yr} value={yr}>{yr}</option>
+                     <button key={yr}
+                        onClick={() => setSelectedPeriod(String(yr))}
+                        className={`px-3 py-1.5 rounded-lg text-sm font-bold transition-all ${selectedPeriod === String(yr) ? 'bg-white shadow text-blue-700' : 'text-gray-500 hover:text-gray-700'}`}
+                     >
+                        {yr}
+                     </button>
                   ))}
-               </select>
+                  <button
+                     onClick={() => setSelectedPeriod('all')}
+                     className={`px-3 py-1.5 rounded-lg text-sm font-bold transition-all ${selectedPeriod === 'all' ? 'bg-white shadow text-blue-700' : 'text-gray-500 hover:text-gray-700'}`}
+                  >
+                     All Time
+                  </button>
+               </div>
+               
                <div className="w-px h-6 bg-gray-300 mx-1 hidden sm:block"></div>
-               <button 
-                  onClick={() => setViewMode('month')}
-                  className={`px-5 py-2 rounded-lg text-sm font-semibold transition-all ${viewMode === 'month' ? 'bg-white text-gray-900 shadow-sm border border-gray-200/60' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}
-               >
-                  Month View
-               </button>
-               <button 
-                  onClick={() => setViewMode('provider')}
-                  className={`px-5 py-2 rounded-lg text-sm font-semibold transition-all ${viewMode === 'provider' ? 'bg-white text-gray-900 shadow-sm border border-gray-200/60' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}
-               >
-                  Provider View
-               </button>
-               <button 
-                  onClick={() => setViewMode('contributions')}
-                  className={`px-5 py-2 rounded-lg text-sm font-semibold transition-all ${viewMode === 'contributions' ? 'bg-white text-green-700 shadow-sm border border-gray-200/60' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}
-               >
-                  Contributions
-               </button>
+               
+               <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
+                  <button 
+                     onClick={() => setViewMode('month')}
+                     className={`px-4 py-1.5 rounded-lg text-sm font-bold transition-all ${viewMode === 'month' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700 shadow-none'}`}
+                  >
+                     Month View
+                  </button>
+                  <button 
+                     onClick={() => setViewMode('provider')}
+                     className={`px-4 py-1.5 rounded-lg text-sm font-bold transition-all ${viewMode === 'provider' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700 shadow-none'}`}
+                  >
+                     Provider View
+                  </button>
+               </div>
             </div>
          </header>
 
@@ -330,17 +340,19 @@ export default function MatchReport() {
                               {/* Right Match Log Gray Box */}
                               <div className="flex justify-end w-full">
                                  <div className="bg-[#f8fafc] rounded-md text-[14px] py-4 px-5 w-full flex justify-between items-center text-gray-700 border border-transparent shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
-                                    {bill.tx ? (
+                                    {bill.txs && bill.txs.length > 0 ? (
                                        <>
                                           <span className="font-mono tracking-tight text-gray-600 pr-4 truncate">
-                                             {bill.tx.dateStr || `${bill.tx.year}-${String(bill.tx.month).padStart(2, '0')}`} — {bill.tx.name || bill.tx.rawBankDescription}
+                                             {bill.txs.length === 1 
+                                                ? `${bill.txs[0].dateStr || `${bill.txs[0].year}-${String(bill.txs[0].month).padStart(2, '0')}`} — ${bill.txs[0].name || bill.txs[0].rawBankDescription}`
+                                                : `${bill.txs.length} transactions linked`}
                                           </span>
                                           <span className="font-mono font-bold tracking-tight whitespace-nowrap text-slate-700">
                                              € {bill.actualPaid.toFixed(2)}
                                           </span>
                                        </>
                                     ) : (
-                                       <span className="text-gray-400 italic w-full text-center">No transaction matched.</span>
+                                       <span className="text-gray-400 italic w-full text-center">No transactions matched.</span>
                                     )}
                                  </div>
                               </div>
@@ -416,12 +428,16 @@ export default function MatchReport() {
                                      </div>
                                      <div className="flex justify-end w-full">
                                         <div className="bg-[#f8fafc] rounded-md text-[14px] py-4 px-5 w-full flex justify-between items-center text-gray-700 border border-transparent shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
-                                           {bill.tx ? (
+                                           {bill.txs && bill.txs.length > 0 ? (
                                               <>
-                                                 <span className="font-mono tracking-tight text-gray-600 pr-4 truncate">{bill.tx.dateStr || `${bill.tx.year}-${String(bill.tx.month).padStart(2, '0')}`} — {bill.tx.name || bill.tx.rawBankDescription}</span>
+                                                 <span className="font-mono tracking-tight text-gray-600 pr-4 truncate">
+                                                    {bill.txs.length === 1 
+                                                       ? `${bill.txs[0].dateStr || `${bill.txs[0].year}-${String(bill.txs[0].month).padStart(2, '0')}`} — ${bill.txs[0].name || bill.txs[0].rawBankDescription}`
+                                                       : `${bill.txs.length} transactions linked`}
+                                                 </span>
                                                  <span className="font-mono font-bold tracking-tight whitespace-nowrap text-slate-700">€ {bill.actualPaid.toFixed(2)}</span>
                                               </>
-                                           ) : <span className="text-gray-400 italic w-full text-center">No transaction matched.</span>}
+                                           ) : <span className="text-gray-400 italic w-full text-center">No transactions matched.</span>}
                                         </div>
                                      </div>
                                   </div>
@@ -434,107 +450,7 @@ export default function MatchReport() {
             ))}
          </div>
 
-         {/* === CONTRIBUTIONS VIEW === */}
-         {viewMode === 'contributions' && (
-            <div className="space-y-6">
-               {memberReports.length === 0 ? (
-                  <div className="py-16 text-center text-gray-500 bg-white rounded-[12px] border border-gray-200">
-                     <svg className="w-12 h-12 text-gray-300 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                     <p className="font-semibold text-lg text-gray-800">No Members configured</p>
-                     <p className="text-sm mt-1">Go to Members to add contributors and import their transactions.</p>
-                  </div>
-               ) : memberReports.map(mr => {
-                  // Filter contributions by year, status, and memberId
-                  const filteredTxs = selectedYear === 'All' 
-                     ? mr.txs.filter(t => t.status === 'contribution' && t.memberId === mr.id)
-                     : mr.txs.filter(t => {
-                          const d = new Date(t.dateStr);
-                          const yearMatch = !isNaN(d.getTime()) ? d.getFullYear() === parseInt(selectedYear, 10) : t.year === parseInt(selectedYear, 10);
-                          return yearMatch && t.status === 'contribution' && t.memberId === mr.id;
-                       });
-                  const totalForYear = filteredTxs.reduce((acc, t) => acc + (t.actualAmount || 0), 0);
-                  return (
-                     <div key={mr.id} className="bg-white rounded-[12px] border border-gray-200 overflow-hidden">
-                        <div className="px-6 py-5 flex items-center justify-between bg-white border-b border-gray-100">
-                           <div className="flex items-center space-x-3">
-                              <span className="flex items-center justify-center bg-green-100 text-green-700 rounded-lg w-10 h-10 font-black text-lg shrink-0">{mr.name.charAt(0).toUpperCase()}</span>
-                              <div>
-                                 <h2 className="text-[18px] font-bold text-slate-800 tracking-tight">{mr.name}</h2>
-                                 <p className="text-xs text-gray-400 mt-0.5">Keywords: {mr.matchKeywords?.join(', ') || 'None configured'}</p>
-                              </div>
-                           </div>
-                           <div className="flex items-center space-x-6">
-                              <div className="text-right">
-                                 <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-400">Total Contributed</p>
-                                 <p className="text-[22px] font-black text-green-600 tracking-tight">€ {totalForYear.toFixed(2)}</p>
-                              </div>
-                              <div className="text-right">
-                                 <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-400">Transactions</p>
-                                 <p className="text-[22px] font-black text-slate-700 tracking-tight">{filteredTxs.length}</p>
-                              </div>
-                           </div>
-                        </div>
-                        <div className="bg-white overflow-x-auto rounded-b-[12px]">
-                           <div className="min-w-[500px] divide-y divide-gray-100">
-                              {filteredTxs.length === 0 ? (
-                                 <div className="py-10 text-center text-gray-400 text-sm italic">No contributions recorded for the selected period.</div>
-                              ) : (
-                                 <>
-                                    {/* Table Header — 4 columns */}
-                                    <div className="py-3 px-6 gap-6 items-center bg-gray-50/50 border-b border-gray-100" style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 0.9fr) minmax(150px, 1.3fr) minmax(100px, 0.8fr) minmax(220px, 2fr)' }}>
-                                       <div className="text-[11px] font-medium text-gray-400 uppercase tracking-widest">Date</div>
-                                       <div className="text-[11px] font-medium text-gray-400 uppercase tracking-widest">Counterparty</div>
-                                       <div className="text-[11px] font-medium text-gray-400 uppercase tracking-widest text-right pr-2">Amount</div>
-                                       <div className="text-[11px] font-medium text-gray-400 uppercase tracking-widest text-right pr-5">Bank Reference</div>
-                                    </div>
-                                    {filteredTxs.map(tx => {
-                                       const txDate = tx.dateStr ? new Date(tx.dateStr) : null;
-                                       const dateLabel = txDate && !isNaN(txDate.getTime())
-                                          ? txDate.toLocaleString('default', { day: '2-digit', month: 'short', year: 'numeric' })
-                                          : (tx.dateStr || `${tx.month}/${tx.year}`);
-                                       const isDeduction = (tx.actualAmount || 0) < 0;
-                                       return (
-                                          <div key={tx.id} className="py-5 px-6 gap-6 items-center" style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 0.9fr) minmax(150px, 1.3fr) minmax(100px, 0.8fr) minmax(220px, 2fr)' }}>
-                                             {/* Date */}
-                                             <div>
-                                                <h4 className="text-[15px] font-bold text-slate-800 tracking-tight">{dateLabel}</h4>
-                                             </div>
-                                             {/* Counterparty */}
-                                             <div>
-                                                <p className="text-[15px] font-semibold text-slate-700 truncate" title={tx.name}>{tx.name}</p>
-                                                {tx.rawBankDescription && (
-                                                   <p className="text-[12px] text-gray-400 mt-0.5 truncate italic" title={tx.rawBankDescription}>{tx.rawBankDescription}</p>
-                                                )}
-                                             </div>
-                                             {/* Amount — green deposit, red deduction */}
-                                             <div className="flex justify-end pr-2">
-                                                <span className={`text-[15px] font-black tracking-tight ${isDeduction ? 'text-red-500' : 'text-green-600'}`}>
-                                                   {isDeduction ? '− ' : '+ '}€ {Math.abs(tx.actualAmount || 0).toFixed(2)}
-                                                </span>
-                                             </div>
-                                             {/* Bank Reference gray box */}
-                                             <div className="flex justify-end w-full">
-                                                <div className="bg-[#f8fafc] rounded-md text-[13px] py-3 px-4 w-full flex justify-between items-center text-gray-700 border border-transparent shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
-                                                   <span className="font-mono tracking-tight text-gray-500 truncate pr-3" title={tx.rawBankDescription || tx.name}>
-                                                      {tx.rawBankDescription || tx.name}
-                                                   </span>
-                                                   <span className={`font-mono font-bold tracking-tight whitespace-nowrap ${isDeduction ? 'text-red-500' : 'text-slate-700'}`}>
-                                                      {tx.amount}
-                                                   </span>
-                                                </div>
-                                             </div>
-                                          </div>
-                                       );
-                                    })}
-                                 </>
-                              )}
-                           </div>
-                        </div>
-                     </div>
-                  );
-               })}
-            </div>
-         )}
+
       </div>
    );
 }
