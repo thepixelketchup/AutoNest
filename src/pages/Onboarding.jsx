@@ -6,6 +6,7 @@ import { createHousehold, joinHousehold } from '../services/householdService';
 export default function Onboarding() {
   const [activeTab, setActiveTab] = useState('create'); // 'create' | 'join'
   const [name, setName] = useState('');
+  const [trackingStart, setTrackingStart] = useState(`${new Date().getFullYear()}-01`);
   const [joinCode, setJoinCode] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -19,7 +20,7 @@ export default function Onboarding() {
     try {
       setLoading(true);
       setError('');
-      await createHousehold(currentUser.uid, name);
+      await createHousehold(currentUser.uid, name, trackingStart);
       await refreshProfile();
       navigate('/');
     } catch (err) {
@@ -80,6 +81,16 @@ export default function Onboarding() {
                   className="w-full p-2 border border-gray-300 rounded focus:ring-blue-500 focus:border-blue-500"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Tracking Start Month</label>
+                <input 
+                  type="month" 
+                  className="w-full p-2 border border-gray-300 rounded text-gray-800 focus:ring-blue-500 focus:border-blue-500"
+                  value={trackingStart}
+                  onChange={(e) => setTrackingStart(e.target.value)}
                   required
                 />
               </div>

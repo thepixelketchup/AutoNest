@@ -1,5 +1,5 @@
 import { db } from './firebase';
-import { collection, doc, setDoc, deleteDoc, query, where, getDocs, writeBatch } from 'firebase/firestore';
+import { collection, doc, setDoc, deleteDoc, query, where, getDocs, writeBatch, getDoc } from 'firebase/firestore';
 
 export async function getProviders(householdId) {
   const q = query(collection(db, 'Households', householdId, 'providers'));
@@ -47,9 +47,25 @@ export async function generateDueBills(householdId) {
   const now = new Date();
   let addedCount = 0;
 
-  // We look back 3 months and 1 month ahead to generate anything missing
+  // Pull dynamic tracking start date securely off the household root
+  const householdRef = doc(db, 'Households', householdId);
+  const householdSnap = await getDoc(householdRef);
+  let trackingStartStr = householdSnap.exists() ? householdSnap.data().trackingStartDate : null;
+  
+  // Safeguards and fallback scaling defaults
+  if (!trackingStartStr) {
+    trackingStartStr = `${now.getFullYear()}-01`; // Defaults perfectly to Jan 1st of current year if missing
+  }
+
+  const [tYear, tMonth] = trackingStartStr.split('-');
+  const startD = new Date(parseInt(tYear, 10), parseInt(tMonth, 10) - 1, 1);
+  
+  // Calculate relative variance spanning months to scale strictly from tracking bound dynamically
+  const maxLookback = (now.getFullYear() - startD.getFullYear()) * 12 + (now.getMonth() - startD.getMonth());
+
+  // Iteratively map the forward propagation
   const monthsToCheck = [];
-  for (let i = -3; i <= 1; i++) {
+  for (let i = -Math.max(0, maxLookback); i <= 0; i++) {
     const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
     monthsToCheck.push({ month: d.getMonth() + 1, year: d.getFullYear() });
   }

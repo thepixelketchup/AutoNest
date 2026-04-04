@@ -9,6 +9,8 @@ export default function MatchReport() {
 
    const [loading, setLoading] = useState(true);
    const [viewMode, setViewMode] = useState('month'); 
+   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+   const [availableYears, setAvailableYears] = useState([new Date().getFullYear()]);
    const [monthReports, setMonthReports] = useState([]);
    const [providerReports, setProviderReports] = useState([]);
 
@@ -28,17 +30,33 @@ export default function MatchReport() {
             getTransactions(userProfile.householdId) 
          ]);
 
+         const now = new Date();
+         const currentYear = now.getFullYear();
+         const currentMonth = now.getMonth() + 1;
+
          // 1. Gather all unique YYYY-MM keys from generated bills natively
+         // AND explicitly shred any future ghost bills from the array 
+         const validBills = fetchedBills.filter(b => b.month && b.year && Object.assign({}, b)).filter(b => {
+             return b.year < currentYear || (b.year === currentYear && b.month <= currentMonth);
+         });
+
          const monthKeysSet = new Set(
-            fetchedBills
-               .filter(b => b.month && b.year)
-               .map(b => `${b.year}-${String(b.month).padStart(2, '0')}`)
+            validBills.map(b => `${b.year}-${String(b.month).padStart(2, '0')}`)
          );
 
          // 2. We always want the current month shown
-         const now = new Date();
-         const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+         const currentMonthKey = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
          monthKeysSet.add(currentMonthKey);
+
+         // Compute all active years for Dropdown
+         const allYears = new Set(validBills.map(b => b.year));
+         allYears.add(currentYear); // Failsafe inclusion
+         const sortedYears = [...allYears].sort((a,b) => b - a);
+         setAvailableYears(sortedYears);
+
+         if (!sortedYears.includes(selectedYear)) {
+            setSelectedYear(sortedYears[0]);
+         }
 
          const monthKeys = [...monthKeysSet];
          monthKeys.sort((a, b) => b.localeCompare(a)); // Descending sort
@@ -49,8 +67,8 @@ export default function MatchReport() {
             const year = parseInt(yearStr, 10);
             const month = parseInt(monthStr, 10);
 
-            // Find all generated bills for this explicit ledger month
-            const billsForMonth = fetchedBills.filter(b => b.year === year && b.month === month);
+            // Find all generated valid bills for this explicit ledger month
+            const billsForMonth = validBills.filter(b => b.year === year && b.month === month);
 
             const ledger = billsForMonth.map(bill => {
                const provider = fetchedProviders.find(p => p.id === bill.providerId);
@@ -98,7 +116,7 @@ export default function MatchReport() {
 
          // 4. Populate report object per provider
          const generatedProviderReports = fetchedProviders.map(provider => {
-            const providerBills = fetchedBills.filter(b => b.providerId === provider.id);
+            const providerBills = validBills.filter(b => b.providerId === provider.id);
             providerBills.sort((a,b) => b.year !== a.year ? b.year - a.year : b.month - a.month);
             
             const ledger = providerBills.map(bill => {
@@ -181,6 +199,20 @@ export default function MatchReport() {
       );
    }
 
+   // Filter calculations for render time (preventing heavy database refetches)
+   const filteredMonthReports = monthReports.filter(r => r.year === parseInt(selectedYear, 10));
+
+   const displayProviderReports = providerReports.map(pr => {
+      const filteredLedger = pr.ledger.filter(b => b.year === parseInt(selectedYear, 10));
+      return {
+         ...pr,
+         ledger: filteredLedger,
+         expectedSum: filteredLedger.reduce((acc, b) => acc + b.expectedAmount, 0),
+         paidSum: filteredLedger.reduce((acc, b) => acc + b.actualPaid, 0),
+         missedCount: filteredLedger.filter(b => b.reportStatus === 'Missed').length,
+      };
+   }).filter(pr => pr.ledger.length > 0);
+
    return (
       <div className="p-4 md:p-8 max-w-[1280px] mx-auto space-y-6">
          <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 mt-2 md:mt-0 gap-4">
@@ -188,7 +220,17 @@ export default function MatchReport() {
                <h1 className="text-xl font-bold text-gray-900">Reports</h1>
                <p className="text-gray-500 text-sm mt-1">Check which bills are paid, missed, or partially paid.</p>
             </div>
-            <div className="flex bg-gray-100 p-1.5 rounded-xl border border-gray-200">
+            <div className="flex bg-gray-100 p-1.5 rounded-xl border border-gray-200 gap-2 items-center pl-3">
+               <select 
+                  className="bg-transparent border-none text-slate-700 font-bold focus:ring-0 text-sm cursor-pointer mx-1"
+                  value={selectedYear}
+                  onChange={(e) => setSelectedYear(e.target.value)}
+               >
+                  {availableYears.map(yr => (
+                     <option key={yr} value={yr}>{yr}</option>
+                  ))}
+               </select>
+               <div className="w-px h-6 bg-gray-300 mx-1 hidden sm:block"></div>
                <button 
                   onClick={() => setViewMode('month')}
                   className={`px-5 py-2 rounded-lg text-sm font-semibold transition-all ${viewMode === 'month' ? 'bg-white text-gray-900 shadow-sm border border-gray-200/60' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}
@@ -205,7 +247,7 @@ export default function MatchReport() {
          </header>
 
          <div className="space-y-8">
-            {viewMode === 'month' ? monthReports.map((report) => (
+            {viewMode === 'month' ? filteredMonthReports.map((report) => (
                <div key={report.key} className="bg-white rounded-[12px] border border-gray-200 overflow-hidden">
                   <div className="px-6 py-5 flex items-center justify-between bg-white border-b border-gray-100">
                      <div className="flex items-center space-x-3">
@@ -303,7 +345,7 @@ export default function MatchReport() {
                      </div>
                   </div>
                </div>
-            )) : providerReports.map((providerState) => (
+            )) : displayProviderReports.map((providerState) => (
                 <div key={providerState.id} className="bg-white rounded-[12px] border border-gray-200 overflow-hidden">
                    <div className="px-6 py-5 flex items-center justify-between bg-white border-b border-gray-100">
                       <div className="flex items-center space-x-3">
@@ -311,8 +353,17 @@ export default function MatchReport() {
                          <h2 className="text-[18px] font-bold text-slate-800 tracking-tight">{providerState.name}</h2>
                       </div>
                       <div className="flex items-center space-x-6 text-[15px] text-gray-600 whitespace-nowrap">
-                         <span className="shrink-0">Category: <strong className="text-gray-900 capitalize">{providerState.category || 'N/A'}</strong></span>
-                         <span className="shrink-0">Payment: <strong className="text-gray-900 capitalize">{providerState.paymentMethod || 'Manual'}</strong></span>
+                         <span className="shrink-0 hidden md:inline">Category: <strong className="text-gray-900 capitalize">{providerState.category || 'N/A'}</strong></span>
+                         <span className="shrink-0 hidden lg:inline">Payment: <strong className="text-gray-900 capitalize">{providerState.paymentMethod || 'Manual'}</strong></span>
+                         <div className="w-px h-5 bg-gray-200 hidden md:block mx-2"></div>
+                         <span className="shrink-0">Expected: <strong className="text-gray-900">€ {providerState.expectedSum.toFixed(2)}</strong></span>
+                         <span className="shrink-0">Paid: <strong className="text-gray-900">€ {providerState.paidSum.toFixed(2)}</strong></span>
+                         {providerState.missedCount > 0 && (
+                            <span className="text-red-600 flex items-center gap-1.5 ml-4 shrink-0 font-medium whitespace-nowrap">
+                               <svg className="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                               <span>{providerState.missedCount} Missed</span>
+                            </span>
+                         )}
                       </div>
                    </div>
                    <div className="bg-white overflow-x-auto rounded-b-[12px]">

@@ -26,7 +26,7 @@ function generateJoinCode() {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
-export async function createHousehold(uid, householdName) {
+export async function createHousehold(uid, householdName, trackingStartDate) {
   const newHouseholdRef = doc(collection(db, 'Households'));
   const joinCode = generateJoinCode();
   
@@ -34,6 +34,7 @@ export async function createHousehold(uid, householdName) {
     id: newHouseholdRef.id,
     name: householdName,
     joinCode: joinCode,
+    trackingStartDate: trackingStartDate || `${new Date().getFullYear()}-01`,
     createdAt: new Date().toISOString()
   };
   
