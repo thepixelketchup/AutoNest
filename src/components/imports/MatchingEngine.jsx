@@ -3,6 +3,25 @@ import { Button } from '../ui/Button';
 import { saveTransaction } from '../../services/billService';
 import { useAuth } from '../../hooks/useAuth';
 
+function parseAmount(amountStr) {
+  if (!amountStr) return 0;
+  let str = amountStr.toString().trim();
+  // Keep only digits, commas, dots, and minus signs
+  str = str.replace(/[^0-9.,-]/g, "");
+  
+  const lastComma = str.lastIndexOf(',');
+  const lastDot = str.lastIndexOf('.');
+  
+  if (lastComma > lastDot) {
+     // Comma acts as the decimal separator (e.g., 1.234,56 or 1234,56)
+     str = str.replace(/\./g, "").replace(/,/g, ".");
+  } else if (lastDot > lastComma) {
+     // Dot acts as the decimal separator (e.g., 1,234.56)
+     str = str.replace(/,/g, "");
+  }
+  return parseFloat(str) || 0;
+}
+
 export function MatchingEngine({ importedData, bills, pendingBills, onComplete }) {
   const [unmatchedPending, setUnmatchedPending] = useState([]);
   const [unmatchedImported, setUnmatchedImported] = useState([]);
@@ -48,8 +67,8 @@ export function MatchingEngine({ importedData, bills, pendingBills, onComplete }
   }, [importedData, bills]);
 
   const prepareTransaction = (bill, tx) => {
-    const rawAmtStr = tx.amount ? tx.amount.toString().replace(/[^0-9.-]+/g,"") : "0";
-    const actualAmount = Math.abs(parseFloat(rawAmtStr)) || 0;
+    const rawAmt = parseAmount(tx.amount);
+    const actualAmount = Math.abs(rawAmt) || 0;
     const isVariance = actualAmount > bill.expectedAmount;
 
     const effectiveDate = tx.dateStr || tx.date;
@@ -109,7 +128,8 @@ export function MatchingEngine({ importedData, bills, pendingBills, onComplete }
     
     // Collect all remaining unmatched items as valid global transactions with no billId (orphan)
     unmatchedImported.forEach(tx => {
-       const rawAmtStr = tx.amount ? tx.amount.toString().replace(/[^0-9.-]+/g,"") : "0";
+       const rawAmt = parseAmount(tx.amount);
+       const actualAmount = Math.abs(rawAmt) || 0;
        const effectiveDate = tx.dateStr || tx.date;
        const txDate = new Date(effectiveDate);
        let parsedMonth = new Date().getMonth() + 1;
@@ -128,7 +148,7 @@ export function MatchingEngine({ importedData, bills, pendingBills, onComplete }
          name: tx.name,
          amount: tx.amount,
          status: 'pending_classification',
-         actualAmount: Math.abs(parseFloat(rawAmtStr)) || 0,
+         actualAmount: actualAmount,
          varianceReason: '',
          source: tx.source || 'csv',
          rawBankDescription: tx.rawBankDescription || ''

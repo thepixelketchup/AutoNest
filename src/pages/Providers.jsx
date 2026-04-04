@@ -39,7 +39,7 @@ export default function Providers() {
   const handleSave = async (providerData) => {
     try {
       if (editingProvider) {
-        await updateBill(editingProvider.id, providerData);
+        await updateBill(userProfile.householdId, editingProvider.id, providerData);
         addToast("Provider updated successfully.", "success");
       } else {
         await addBill(userProfile.householdId, providerData);

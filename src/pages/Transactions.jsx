@@ -44,7 +44,7 @@ export default function Transactions() {
   const handleUnmatch = async (tx) => {
     if (window.confirm("Remove this transaction's mapping? It will appear back in Unmatched.")) {
       try {
-        await updateTransaction(tx.id, {
+        await updateTransaction(userProfile.householdId, tx.id, {
            billId: null,
            status: 'pending_classification',
            varianceReason: ''
@@ -64,7 +64,7 @@ export default function Transactions() {
       const actualAmount = Math.abs(parseFloat(tx.amount.toString().replace(/[^0-9.-]+/g,""))) || 0;
       const isVariance = actualAmount > bill.expectedAmount;
 
-      await updateTransaction(tx.id, {
+      await updateTransaction(userProfile.householdId, tx.id, {
          billId: selectedBillId,
          status: 'cleared',
          actualAmount: actualAmount,
@@ -127,7 +127,7 @@ export default function Transactions() {
       setPendingProposals(null);
       setLoading(true);
       const payload = approvedMatches.map(m => ({ id: m.id, updates: m.updates }));
-      await updateBulkTransactions(payload);
+      await updateBulkTransactions(userProfile.householdId, payload);
       addToast(`Successfully swept ${payload.length} historic transactions!`, 'success');
       fetchData();
     } catch (e) {
@@ -139,7 +139,7 @@ export default function Transactions() {
   const handleDelete = async (txId) => {
     if (window.confirm("Permanently delete this transaction?")) {
       try {
-        await deleteTransaction(txId);
+        await deleteTransaction(userProfile.householdId, txId);
         addToast("Transaction deleted.");
         fetchData();
       } catch (err) {

@@ -102,7 +102,7 @@ export default function Imports() {
   const handleComplete = async (finalTransactions) => {
     try {
       if (finalTransactions && finalTransactions.length > 0) {
-        await saveBulkTransactions(finalTransactions);
+        await saveBulkTransactions(userProfile.householdId, finalTransactions);
       }
       setStep(1);
       setRawCsvData([]);
