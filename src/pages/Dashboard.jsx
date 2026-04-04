@@ -2,11 +2,12 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { getProviders, getMembers, getBills, getTransactions, getBillPeriodMonthYear } from '../services/billService';
+import { getHousehold } from '../services/householdService';
 import { useToast } from '../hooks/useToast';
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 const fmt = (n) => `€ ${Math.abs(Number(n || 0)).toFixed(2)}`;
-const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 function RingProgress({ pct = 0, size = 130, stroke = 13, color = '#3b82f6' }) {
   const r = (size - stroke) / 2;
@@ -14,8 +15,8 @@ function RingProgress({ pct = 0, size = 130, stroke = 13, color = '#3b82f6' }) {
   const offset = circ - (Math.min(100, pct) / 100) * circ;
   return (
     <svg width={size} height={size} style={{ transform: 'rotate(-90deg)' }}>
-      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#f1f5f9" strokeWidth={stroke} />
-      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color}
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#f1f5f9" strokeWidth={stroke} />
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color}
         strokeWidth={stroke} strokeLinecap="round"
         strokeDasharray={circ} strokeDashoffset={offset}
         style={{ transition: 'stroke-dashoffset 0.8s ease' }} />
@@ -25,13 +26,13 @@ function RingProgress({ pct = 0, size = 130, stroke = 13, color = '#3b82f6' }) {
 
 function StatCard({ label, value, sub, icon, accent = 'blue' }) {
   const clr = {
-    blue:   ['bg-blue-50',   'text-blue-500',   'text-blue-700'],
-    green:  ['bg-green-50',  'text-green-500',  'text-green-700'],
-    amber:  ['bg-amber-50',  'text-amber-500',  'text-amber-700'],
-    red:    ['bg-red-50',    'text-red-500',    'text-red-700'],
+    blue: ['bg-blue-50', 'text-blue-500', 'text-blue-700'],
+    green: ['bg-green-50', 'text-green-500', 'text-green-700'],
+    amber: ['bg-amber-50', 'text-amber-500', 'text-amber-700'],
+    red: ['bg-red-50', 'text-red-500', 'text-red-700'],
     purple: ['bg-purple-50', 'text-purple-500', 'text-purple-700'],
     indigo: ['bg-indigo-50', 'text-indigo-500', 'text-indigo-700'],
-  }[accent] || ['bg-blue-50','text-blue-500','text-blue-700'];
+  }[accent] || ['bg-blue-50', 'text-blue-500', 'text-blue-700'];
   return (
     <div className="bg-white rounded-2xl border border-gray-200 p-5 flex flex-col justify-between min-h-[110px] hover:shadow-md transition-shadow">
       <div className="flex items-center justify-between mb-3">
@@ -61,16 +62,17 @@ export default function Dashboard() {
   const { addToast } = useToast();
   const navigate = useNavigate();
 
-  const now     = new Date();
+  const now = new Date();
   const thisMonth = now.getMonth() + 1;
-  const thisYear  = now.getFullYear();
-  const todayDay  = now.getDate();
+  const thisYear = now.getFullYear();
+  const todayDay = now.getDate();
 
-  const [loading,      setLoading]      = useState(true);
-  const [providers,    setProviders]    = useState([]);
-  const [members,      setMembers]      = useState([]);
-  const [allBills,     setAllBills]     = useState([]);
-  const [allTxs,       setAllTxs]       = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [providers, setProviders] = useState([]);
+  const [members, setMembers] = useState([]);
+  const [allBills, setAllBills] = useState([]);
+  const [allTxs, setAllTxs] = useState([]);
+  const [household, setHousehold] = useState(null);
   const [selectedPeriod, setSelectedPeriod] = useState('month'); // 'month' | '2025' | '2026' | 'all'
 
   useEffect(() => {
@@ -80,16 +82,18 @@ export default function Dashboard() {
   async function fetchData() {
     try {
       setLoading(true);
-      const [p, b, t, m] = await Promise.all([
+      const [p, b, t, m, hs] = await Promise.all([
         getProviders(userProfile.householdId),
         getBills(userProfile.householdId),
         getTransactions(userProfile.householdId),
         getMembers(userProfile.householdId),
+        getHousehold(userProfile.householdId)
       ]);
       setProviders(p);
       setAllBills(b);
       setAllTxs(t);
       setMembers(m);
+      setHousehold(hs);
     } catch {
       addToast('Failed to load dashboard.', 'error');
     } finally {
@@ -99,30 +103,35 @@ export default function Dashboard() {
 
   // ── Available years from bills ─────────────────────────────────────────────
   const availableYears = useMemo(() => {
-    const yrs = new Set(allBills.map(b => b.year));
-    allTxs.forEach(t => { if (t.year) yrs.add(t.year); });
-    return [...yrs].sort((a,b) => b - a);
-  }, [allBills, allTxs]);
+    let startYear = thisYear;
+    if (household?.trackingStartDate) {
+      const parts = household.trackingStartDate.split('-');
+      if (parts.length > 0) startYear = parseInt(parts[0], 10);
+    }
+    const yrs = [];
+    for (let y = thisYear; y >= startYear; y--) yrs.push(y);
+    return yrs;
+  }, [household]);
 
   // ── Filter helpers ─────────────────────────────────────────────────────────
   const billInPeriod = (bill) => {
     const { month: bm, year: by } = getBillPeriodMonthYear(bill);
     if (selectedPeriod === 'month') return bm === thisMonth && by === thisYear;
-    if (selectedPeriod === 'all')   return true;
+    if (selectedPeriod === 'all') return true;
     return by === parseInt(selectedPeriod, 10);
   };
   const txInPeriod = (tx) => {
     const d = tx.dateStr ? new Date(tx.dateStr) : null;
-    const txYear  = d && !isNaN(d) ? d.getFullYear() : tx.year;
+    const txYear = d && !isNaN(d) ? d.getFullYear() : tx.year;
     const txMonth = d && !isNaN(d) ? d.getMonth() + 1 : tx.month;
     if (selectedPeriod === 'month') return txYear === thisYear && txMonth === thisMonth;
-    if (selectedPeriod === 'all')   return true;
+    if (selectedPeriod === 'all') return true;
     return txYear === parseInt(selectedPeriod, 10);
   };
 
   // ── Derived data ───────────────────────────────────────────────────────────
   const periodBills = allBills.filter(billInPeriod);
-  const periodTxs   = allTxs.filter(txInPeriod);
+  const periodTxs = allTxs.filter(txInPeriod);
 
   const enrichedBills = periodBills.map(bill => {
     const provider = providers.find(p => p.id === bill.providerId);
@@ -130,36 +139,38 @@ export default function Dashboard() {
     return { ...bill, providerName: provider?.name || '?', category: provider?.category || '', tx };
   });
 
-  const totalExpected  = enrichedBills.reduce((s, b) => s + (b.amount || 0), 0);
-  const totalPaid      = enrichedBills.filter(b => b.tx).reduce((s, b) => s + (b.tx?.actualAmount || 0), 0);
-  const totalRemaining = enrichedBills.filter(b => !b.tx).reduce((s, b) => s + (b.amount || 0), 0);
-  const clearedCount   = enrichedBills.filter(b => b.tx).length;
-  const paidPct        = totalExpected > 0 ? (totalPaid / totalExpected) * 100 : 0;
-  const overdueBills   = selectedPeriod === 'month'
+  const totalExpected = enrichedBills.reduce((s, b) => s + (b.amount || 0) + (b.lateFee || 0), 0);
+  const totalPaid = enrichedBills.filter(b => b.tx).reduce((s, b) => s + (b.tx?.actualAmount || 0), 0);
+  const totalRemaining = enrichedBills.filter(b => !b.tx).reduce((s, b) => s + (b.amount || 0) + (b.lateFee || 0), 0);
+  const totalFines = enrichedBills.reduce((s, b) => s + (b.lateFee || 0), 0);
+  const totalFinesPaid = enrichedBills.filter(b => b.tx).reduce((s, b) => s + (b.lateFee || 0), 0);
+  const clearedCount = enrichedBills.filter(b => b.tx).length;
+  const paidPct = totalExpected > 0 ? (totalPaid / totalExpected) * 100 : 0;
+  const overdueBills = selectedPeriod === 'month'
     ? enrichedBills.filter(b => !b.tx && b.billingPeriod?.type === 'month' && b.status === 'overdue')
     : [];
 
   // Contributions
-  const contribTxs  = periodTxs.filter(t => t.status === 'contribution' && t.memberId && !t.billId);
+  const contribTxs = periodTxs.filter(t => t.status === 'contribution' && t.memberId && !t.billId);
   const totalContrib = contribTxs.reduce((s, t) => s + (t.actualAmount || 0), 0);
 
   // Provider spend breakdown
   const providerSpend = providers.map(p => {
     const pBills = enrichedBills.filter(b => b.providerId === p.id);
-    const expected = pBills.reduce((s, b) => s + (b.amount || 0), 0);
-    const paid     = pBills.filter(b => b.tx).reduce((s, b) => s + (b.tx?.actualAmount || 0), 0);
-    const missed   = pBills.filter(b => !b.tx && b.status !== 'cleared').length;
+    const expected = pBills.reduce((s, b) => s + (b.amount || 0) + (b.lateFee || 0), 0);
+    const paid = pBills.filter(b => b.tx).reduce((s, b) => s + (b.tx?.actualAmount || 0), 0);
+    const missed = pBills.filter(b => !b.tx && b.status !== 'cleared').length;
     return { id: p.id, name: p.name, category: p.category, expected, paid, missed };
-  }).filter(p => p.expected > 0).sort((a,b) => b.expected - a.expected);
+  }).filter(p => p.expected > 0).sort((a, b) => b.expected - a.expected);
 
   const maxProvSpend = Math.max(...providerSpend.map(p => p.expected), 1);
 
   // Member summaries
   const memberSummaries = members.map(m => {
-    const mTxs     = contribTxs.filter(t => t.memberId === m.id);
-    const deposits  = mTxs.filter(t => (t.actualAmount||0) > 0).reduce((s,t) => s + (t.actualAmount||0), 0);
-    const deductions= mTxs.filter(t => (t.actualAmount||0) < 0).reduce((s,t) => s + Math.abs(t.actualAmount||0), 0);
-    const net       = deposits - deductions;
+    const mTxs = contribTxs.filter(t => t.memberId === m.id);
+    const deposits = mTxs.filter(t => (t.actualAmount || 0) > 0).reduce((s, t) => s + (t.actualAmount || 0), 0);
+    const deductions = mTxs.filter(t => (t.actualAmount || 0) < 0).reduce((s, t) => s + Math.abs(t.actualAmount || 0), 0);
+    const net = deposits - deductions;
     return { ...m, deposits, deductions, net, txCount: mTxs.length };
   });
   const maxDeposit = Math.max(...memberSummaries.map(m => m.deposits), 1);
@@ -169,31 +180,40 @@ export default function Dashboard() {
     if (selectedPeriod === 'month') {
       // Current month: last 6 months comparison
       return Array.from({ length: 6 }, (_, i) => {
-        const d   = new Date(thisYear, now.getMonth() - (5 - i), 1);
-        const mn  = d.getMonth() + 1;
-        const yr  = d.getFullYear();
-        const b   = allBills.filter(x => x.month === mn && x.year === yr);
-        const exp = b.reduce((s, x) => s + (x.amount || 0), 0);
-        const paid= allTxs.filter(t => b.some(x => x.id === t.billId) && t.status === 'cleared').reduce((s,t) => s + (t.actualAmount||0), 0);
-        return { label: `${MONTHS[mn-1]} ${yr !== thisYear ? yr : ''}`.trim(), exp, paid, isCurrent: mn === thisMonth && yr === thisYear };
+        const d = new Date(thisYear, now.getMonth() - (5 - i), 1);
+        const mn = d.getMonth() + 1;
+        const yr = d.getFullYear();
+        const b = allBills.filter(x => {
+          const { month, year } = getBillPeriodMonthYear(x);
+          return month === mn && year === yr;
+        });
+        const exp = b.reduce((s, x) => s + (x.amount || 0) + (x.lateFee || 0), 0);
+        const paid = allTxs.filter(t => b.some(x => x.id === t.billId) && t.status === 'cleared').reduce((s, t) => s + (t.actualAmount || 0), 0);
+        return { label: `${MONTHS[mn - 1]} ${yr !== thisYear ? yr : ''}`.trim(), exp, paid, isCurrent: mn === thisMonth && yr === thisYear };
       });
     }
     if (selectedPeriod === 'all') {
       // All years: one bar per year
       return availableYears.slice().reverse().map(yr => {
-        const b   = allBills.filter(x => x.year === yr);
-        const exp = b.reduce((s, x) => s + (x.amount || 0), 0);
-        const paid= allTxs.filter(t => b.some(x => x.id === t.billId) && t.status === 'cleared').reduce((s,t) => s + (t.actualAmount||0), 0);
+        const b = allBills.filter(x => {
+          const { year } = getBillPeriodMonthYear(x);
+          return year === yr;
+        });
+        const exp = b.reduce((s, x) => s + (x.amount || 0) + (x.lateFee || 0), 0);
+        const paid = allTxs.filter(t => b.some(x => x.id === t.billId) && t.status === 'cleared').reduce((s, t) => s + (t.actualAmount || 0), 0);
         return { label: String(yr), exp, paid, isCurrent: yr === thisYear };
       });
     }
     // Specific year: month by month
     const yr = parseInt(selectedPeriod, 10);
     return Array.from({ length: 12 }, (_, i) => {
-      const mn  = i + 1;
-      const b   = allBills.filter(x => x.month === mn && x.year === yr);
-      const exp = b.reduce((s, x) => s + (x.amount || 0), 0);
-      const paid= allTxs.filter(t => b.some(x => x.id === t.billId) && t.status === 'cleared').reduce((s,t) => s + (t.actualAmount||0), 0);
+      const mn = i + 1;
+      const b = allBills.filter(x => {
+        const { month, year } = getBillPeriodMonthYear(x);
+        return month === mn && year === yr;
+      });
+      const exp = b.reduce((s, x) => s + (x.amount || 0) + (x.lateFee || 0), 0);
+      const paid = allTxs.filter(t => b.some(x => x.id === t.billId) && t.status === 'cleared').reduce((s, t) => s + (t.actualAmount || 0), 0);
       return { label: MONTHS[i], exp, paid, isCurrent: mn === thisMonth && yr === thisYear };
     });
   }, [selectedPeriod, allBills, allTxs, availableYears]);
@@ -295,8 +315,8 @@ export default function Dashboard() {
       )}
 
       {/* ── KPI CARDS ───────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-        <StatCard label={`Expected · ${periodLabel}`} value={fmt(totalExpected)}
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+        <StatCard label={`Bills · ${periodLabel}`} value={fmt(totalExpected)}
           sub={`${periodBills.length} bills`} accent="blue"
           icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2" /></svg>}
         />
@@ -308,13 +328,17 @@ export default function Dashboard() {
           sub={overdueBills.length > 0 ? `${overdueBills.length} overdue` : '0 overdue'} accent={overdueBills.length > 0 ? 'red' : 'amber'}
           icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>}
         />
+        <StatCard label="Fines Paid" value={fmt(totalFinesPaid)}
+          sub={`€${totalFines.toFixed(0)} total assessed`} accent={totalFines > 0 ? "amber" : "green"}
+          icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>}
+        />
         <StatCard label={`Contributions · ${periodLabel}`} value={fmt(totalContrib)}
           sub={`${contribTxs.length} transaction${contribTxs.length !== 1 ? 's' : ''}`} accent="purple"
           icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" /></svg>}
         />
-        <StatCard label="Coverage Rate" value={`${Math.round(paidPct)}%`}
-          sub={`€${(totalExpected - totalPaid).toFixed(0)} gap`} accent="indigo"
-          icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>}
+        <StatCard label="Net Balance" value={`${totalContrib - totalPaid >= 0 ? '+' : '−'} ${fmt(totalContrib - totalPaid)}`}
+          sub="Pool liquidity vs Expenses" accent={totalContrib - totalPaid >= 0 ? "indigo" : "red"}
+          icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>}
         />
       </div>
 
@@ -395,7 +419,7 @@ export default function Dashboard() {
             {providerSpend.length === 0 ? (
               <div className="py-14 text-center text-gray-400 text-sm">No bill data for this period.</div>
             ) : providerSpend.map(p => {
-              const pct     = (p.expected / maxProvSpend) * 100;
+              const pct = (p.expected / maxProvSpend) * 100;
               const paidPct = p.expected > 0 ? (p.paid / p.expected) * 100 : 0;
               return (
                 <div key={p.id} className="px-5 py-4">
@@ -494,7 +518,7 @@ export default function Dashboard() {
 
           {/* Upcoming this month (only in month view) */}
           {selectedPeriod === 'month' && (() => {
-            const upcoming = enrichedBills.filter(b => !b.tx && b.expectedDay >= todayDay && b.expectedDay <= todayDay + 7).sort((a,b) => a.expectedDay - b.expectedDay);
+            const upcoming = enrichedBills.filter(b => !b.tx && b.expectedDay >= todayDay && b.expectedDay <= todayDay + 7).sort((a, b) => a.expectedDay - b.expectedDay);
             if (upcoming.length === 0) return null;
             return (
               <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
@@ -508,7 +532,7 @@ export default function Dashboard() {
                         <p className="text-sm font-semibold text-gray-800">{b.providerName}</p>
                         <p className="text-[10px] text-gray-400">Day {b.expectedDay}</p>
                       </div>
-                      <p className="text-sm font-black text-amber-600">{fmt(b.amount)}</p>
+                      <p className="text-sm font-black text-amber-600">{fmt((b.amount || 0) + (b.lateFee || 0))}</p>
                     </div>
                   ))}
                 </div>
@@ -531,17 +555,17 @@ export default function Dashboard() {
               No transactions imported yet.
             </div>
           ) : recentTxs.map(tx => {
-            const isContrib  = tx.status === 'contribution';
-            const isDeduct   = isContrib && (tx.actualAmount||0) < 0;
-            const isCleared  = tx.status === 'cleared';
+            const isContrib = tx.status === 'contribution';
+            const isDeduct = isContrib && (tx.actualAmount || 0) < 0;
+            const isCleared = tx.status === 'cleared';
             const isUnmatched = !tx.billId && !isContrib;
-            const member     = isContrib ? members.find(m => m.id === tx.memberId) : null;
-            const txBill     = tx.billId ? allBills.find(b => b.id === tx.billId) : null;
+            const member = isContrib ? members.find(m => m.id === tx.memberId) : null;
+            const txBill = tx.billId ? allBills.find(b => b.id === tx.billId) : null;
             const txProvider = txBill ? providers.find(p => p.id === txBill.providerId) : null;
-            const iconBg     = isDeduct ? 'bg-red-100' : isContrib ? 'bg-purple-100' : isCleared ? 'bg-green-100' : 'bg-gray-100';
-            const iconColor  = isDeduct ? 'text-red-500' : isContrib ? 'text-purple-500' : isCleared ? 'text-green-500' : 'text-gray-400';
-            const amtColor   = isDeduct ? 'text-red-500' : isContrib ? 'text-purple-600' : isCleared ? 'text-green-600' : 'text-gray-400';
-            const amtPrefix  = isDeduct ? '−' : isContrib ? '+' : '';
+            const iconBg = isDeduct ? 'bg-red-100' : isContrib ? 'bg-purple-100' : isCleared ? 'bg-green-100' : 'bg-gray-100';
+            const iconColor = isDeduct ? 'text-red-500' : isContrib ? 'text-purple-500' : isCleared ? 'text-green-500' : 'text-gray-400';
+            const amtColor = isDeduct ? 'text-red-500' : isContrib ? 'text-purple-600' : isCleared ? 'text-green-600' : 'text-gray-400';
+            const amtPrefix = isDeduct ? '−' : isContrib ? '+' : '';
             return (
               <div key={tx.id} className="px-6 py-4 flex items-center gap-4 hover:bg-gray-50/50 transition-colors">
                 <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${iconBg}`}>
