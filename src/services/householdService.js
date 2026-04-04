@@ -22,6 +22,11 @@ export async function createUserProfile(user) {
   return userData;
 }
 
+export async function updateUserProfileName(uid, displayName) {
+  const userRef = doc(db, 'Users', uid);
+  await updateDoc(userRef, { displayName });
+}
+
 function generateJoinCode() {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
@@ -70,4 +75,11 @@ export async function getHousehold(householdId) {
   const docRef = doc(db, 'Households', householdId);
   const docSnap = await getDoc(docRef);
   return docSnap.exists() ? docSnap.data() : null;
+}
+
+export async function getHouseholdUsers(householdId) {
+  if (!householdId) return [];
+  const q = query(collection(db, 'Users'), where("householdId", "==", householdId));
+  const querySnapshot = await getDocs(q);
+  return querySnapshot.docs.map(doc => doc.data());
 }

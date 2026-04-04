@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { createHousehold, joinHousehold } from '../services/householdService';
+import { createHousehold, joinHousehold, updateUserProfileName } from '../services/householdService';
 
 export default function Onboarding() {
   const [activeTab, setActiveTab] = useState('create'); // 'create' | 'join'
   const [name, setName] = useState('');
+  const [userName, setUserName] = useState('');
   const [trackingStart, setTrackingStart] = useState(`${new Date().getFullYear()}-01`);
   const [joinCode, setJoinCode] = useState('');
   const [error, setError] = useState('');
@@ -16,11 +17,12 @@ export default function Onboarding() {
 
   async function handleCreate(e) {
     e.preventDefault();
-    if (!name.trim()) return;
+    if (!name.trim() || !userName.trim()) return;
     try {
       setLoading(true);
       setError('');
       await createHousehold(currentUser.uid, name, trackingStart);
+      await updateUserProfileName(currentUser.uid, userName);
       await refreshProfile();
       navigate('/');
     } catch (err) {
@@ -33,11 +35,12 @@ export default function Onboarding() {
 
   async function handleJoin(e) {
     e.preventDefault();
-    if (!joinCode.trim()) return;
+    if (!joinCode.trim() || !userName.trim()) return;
     try {
       setLoading(true);
       setError('');
       await joinHousehold(currentUser.uid, joinCode.toUpperCase());
+      await updateUserProfileName(currentUser.uid, userName);
       await refreshProfile();
       navigate('/');
     } catch (err) {
@@ -74,6 +77,17 @@ export default function Onboarding() {
               <h2 className="text-xl font-semibold text-gray-800">Set up a new household</h2>
               <p className="text-sm text-gray-500">Create a centralized space to manage all shared bills and direct debits.</p>
               <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Your Name</label>
+                <input 
+                  type="text" 
+                  placeholder="e.g. Divya"
+                  className="w-full p-2 border border-gray-300 rounded focus:ring-blue-500 focus:border-blue-500"
+                  value={userName}
+                  onChange={(e) => setUserName(e.target.value)}
+                  required
+                />
+              </div>
+              <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Household Name</label>
                 <input 
                   type="text" 
@@ -106,6 +120,17 @@ export default function Onboarding() {
             <form onSubmit={handleJoin} className="space-y-4">
               <h2 className="text-xl font-semibold text-gray-800">Join an existing household</h2>
               <p className="text-sm text-gray-500">Enter the 6-character Join Code provided by someone already in the household.</p>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Your Name</label>
+                <input 
+                  type="text" 
+                  placeholder="e.g. Divya"
+                  className="w-full p-2 border border-gray-300 rounded focus:ring-blue-500 focus:border-blue-500"
+                  value={userName}
+                  onChange={(e) => setUserName(e.target.value)}
+                  required
+                />
+              </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Join Code</label>
                 <input 

@@ -14,6 +14,7 @@ import Members from './pages/Members';
 import Contributions from './pages/Contributions';
 import Bills from './pages/Bills';
 import MatchReport from './pages/MatchReport';
+import Settings from './pages/Settings';
 
 function App() {
   return (
@@ -46,6 +47,7 @@ function App() {
             <Route path="/imports" element={<Imports />} />
             <Route path="/providers" element={<Providers />} />
             <Route path="/members" element={<Members />} />
+            <Route path="/settings" element={<Settings />} />
           </Route>
         </Routes>
       </Router>
