@@ -62,7 +62,7 @@ function BillSelector({ allBills, providers, txDate, selections, setSelections, 
     .map(b => ({ ...b, score: scoreBillForTx(b, txDate) }))
     .sort((a, b) => b.score - a.score);
 
-  const txAmt          = Math.abs(Number(txAmount) || 0);
+  const txAmt          = Math.abs(parseAmount(txAmount));
   // Available budget = total tx - what's already allocated via existing links
   const availableBudget = txAmt > 0 ? Math.max(0, txAmt - existingAllocated) : txAmt;
   const totalNew        = Object.values(selections).reduce((s, v) => s + (Number(v) || 0), 0);
@@ -70,6 +70,13 @@ function BillSelector({ allBills, providers, txDate, selections, setSelections, 
   // Progress bar: show existing + new vs total
   const totalAllocated  = existingAllocated + totalNew;
   const budgetLeft      = txAmt - totalAllocated;
+  const pctUsed         = txAmt > 0 ? (totalAllocated / txAmt) * 100 : 0;
+  
+  let dynColor = 'bg-blue-500';
+  if (isOverBudget) dynColor = 'bg-red-500';
+  else if (pctUsed > 99) dynColor = 'bg-green-500';
+  else if (pctUsed > 80) dynColor = 'bg-orange-500';
+  else if (pctUsed > 50) dynColor = 'bg-amber-400';
 
   function toggleBill(billId, billRemaining) {
     setSelections(prev => {
@@ -78,7 +85,7 @@ function BillSelector({ allBills, providers, txDate, selections, setSelections, 
         delete next[billId];
       } else {
         const alreadyNewAlloc = Object.values(prev).reduce((s, v) => s + (Number(v) || 0), 0);
-        const budget = availableBudget > 0 ? Math.max(0, availableBudget - alreadyNewAlloc) : billRemaining;
+        const budget = txAmt > 0 ? Math.max(0, availableBudget - alreadyNewAlloc) : billRemaining;
         next[billId] = Math.min(budget, billRemaining);
       }
       return next;
@@ -102,17 +109,18 @@ function BillSelector({ allBills, providers, txDate, selections, setSelections, 
         <div className={`rounded-xl px-3.5 py-2.5 flex items-center justify-between text-xs font-semibold gap-3 ${
           isOverBudget ? 'bg-red-50 border border-red-200' : 'bg-gray-50 border border-gray-200'
         }`}>
-          <div className="flex items-center gap-2 min-w-0">
-            <span className={isOverBudget ? 'text-red-600' : 'text-gray-500'}>
+          <div className="flex items-center gap-3 flex-1 min-w-0">
+            <span className={`shrink-0 ${isOverBudget ? 'text-red-600' : 'text-gray-500'}`}>
               {isOverBudget ? '⚠ Over budget!' : existingAllocated > 0 ? 'Remaining budget:' : 'Transaction budget:'}
             </span>
-            <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden min-w-[60px]">
+            <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden min-w-[60px] relative">
               {/* Existing allocation (blue) */}
-              <div className="h-full flex">
-                <div className="bg-blue-300 h-full" style={{ width: `${txAmt > 0 ? Math.min(100, (existingAllocated / txAmt) * 100) : 0}%` }} />
-                <div className={`h-full ${isOverBudget ? 'bg-red-500' : 'bg-blue-500'}`}
-                  style={{ width: `${txAmt > 0 ? Math.min(100, (totalNew / txAmt) * 100) : 0}%` }} />
-              </div>
+              <div className="absolute top-0 bottom-0 left-0 bg-blue-300 transition-all duration-300" style={{ width: `${txAmt > 0 ? Math.min(100, (existingAllocated / txAmt) * 100) : 0}%` }} />
+              <div className={`absolute top-0 bottom-0 transition-colors transition-all duration-300 ${dynColor}`}
+                style={{ 
+                  left: `${txAmt > 0 ? Math.min(100, (existingAllocated / txAmt) * 100) : 0}%`,
+                  width: `${txAmt > 0 ? Math.min(100 - (existingAllocated / txAmt) * 100, (totalNew / txAmt) * 100) : 0}%` 
+                }} />
             </div>
           </div>
           <div className="shrink-0 text-right">
@@ -132,15 +140,18 @@ function BillSelector({ allBills, providers, txDate, selections, setSelections, 
         {activeBills.map(bill => {
           const prov      = providers.find(p => p.id === bill.providerId);
           const isChk     = selections[bill.id] !== undefined;
+          const isDisabled = !isChk && txAmt > 0 && budgetLeft <= 0;
           const totalDue  = (bill.amount || 0) + (bill.lateFee || 0);
           const remaining = Math.max(0, totalDue - (bill.totalPaid || 0));
           return (
             <div key={bill.id}
-              className={`rounded-xl border p-3 cursor-pointer transition-all ${
-                isChk ? 'border-blue-300 bg-blue-50' : 'border-gray-200 hover:border-blue-200 hover:bg-gray-50'
+              className={`rounded-xl border p-3 transition-all ${
+                isChk ? 'border-blue-300 bg-blue-50' : 
+                isDisabled ? 'border-gray-100 bg-gray-50/50 opacity-50 grayscale-[50%] cursor-not-allowed' :
+                'cursor-pointer border-gray-200 hover:border-blue-200 hover:bg-gray-50'
               }`}>
-              <div className="flex items-center gap-3" onClick={() => toggleBill(bill.id, remaining)}>
-                <input type="checkbox" readOnly checked={isChk} className="rounded accent-blue-600 w-4 h-4 shrink-0" />
+              <div className="flex items-center gap-3" onClick={() => { if (!isDisabled) toggleBill(bill.id, remaining); }}>
+                <input type="checkbox" readOnly checked={isChk} disabled={isDisabled} className="rounded accent-blue-600 w-4 h-4 shrink-0 cursor-[inherit]" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-gray-800 truncate">{prov?.name || '—'}</p>
                   <p className="text-[11px] text-gray-400">{getBillPeriodLabel(bill)}</p>
@@ -169,7 +180,7 @@ function BillSelector({ allBills, providers, txDate, selections, setSelections, 
                       type="number" step="0.01" min="0"
                       max={availableBudget > 0 ? availableBudget : undefined}
                       value={selections[bill.id]}
-                      onChange={e => setSelections(prev => ({ ...prev, [bill.id]: parseFloat(e.target.value) || 0 }))}
+                      onChange={e => setSelections(prev => ({ ...prev, [bill.id]: parseAmount(e.target.value) || 0 }))}
                       className={`w-full border rounded-lg pl-6 pr-2 py-1.5 text-sm focus:ring-1 outline-none ${
                         isOverBudget ? 'border-red-300 focus:ring-red-400' : 'border-blue-200 focus:ring-blue-400'
                       }`}
@@ -640,7 +651,9 @@ export default function Transactions() {
       });
     } else {
       for (const [billId, paidAmt] of Object.entries(selections)) {
-        await linkTransactionToBill(userProfile.householdId, billId, txId, Number(paidAmt));
+        if (Number(paidAmt) > 0) {
+          await linkTransactionToBill(userProfile.householdId, billId, txId, Number(paidAmt));
+        }
       }
     }
   }
@@ -980,10 +993,10 @@ export default function Transactions() {
                     }`}>
                       {tx.name?.charAt(0)?.toUpperCase() || '?'}
                     </div>
-                    <div className="min-w-0 flex-1 whitespace-normal">
-                      <p className="font-bold text-gray-900 text-sm leading-tight">{tx.name}</p>
+                    <div className="min-w-0 flex-1">
+                      <p className="font-semibold text-gray-800 text-sm truncate">{tx.name}</p>
                       {tx.rawBankDescription && (
-                        <p className="text-[10px] text-gray-400 font-medium mt-1 leading-snug break-words" title={tx.rawBankDescription}>
+                        <p className="text-[10px] text-gray-400 truncate" title={tx.rawBankDescription}>
                           {tx.rawBankDescription}
                         </p>
                       )}
@@ -1087,9 +1100,9 @@ export default function Transactions() {
                        }`}>
                          {tx.name?.charAt(0)?.toUpperCase()}
                        </div>
-                       <div className="min-w-0 pr-2 whitespace-normal flex-1">
-                         <p className="font-bold text-gray-900 text-sm leading-tight">{tx.name}</p>
-                         <p className="text-xs text-gray-400 font-medium mt-1">{formatDDMMYYYY(tx.dateStr || `${tx.year}-${tx.month}-01`)}</p>
+                       <div className="min-w-0 pr-2 flex-1">
+                         <p className="font-semibold text-gray-800 text-sm truncate">{tx.name}</p>
+                         <p className="text-[10px] text-gray-400 mt-0.5 truncate">{formatDDMMYYYY(tx.dateStr || `${tx.year}-${tx.month}-01`)}</p>
                        </div>
                     </div>
                     <div className="text-right shrink-0">
@@ -1098,7 +1111,7 @@ export default function Transactions() {
                   </div>
 
                   {tx.rawBankDescription && (
-                    <p className="text-[11px] text-gray-400 italic break-words leading-snug">"{tx.rawBankDescription}"</p>
+                    <p className="text-[10px] text-gray-400 truncate mt-0.5" title={tx.rawBankDescription}>{tx.rawBankDescription}</p>
                   )}
 
                   <div className="flex flex-col gap-1.5">

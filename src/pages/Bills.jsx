@@ -46,58 +46,66 @@ function LinkedTxsModal({ bill, linkedTxs, billAmountLabel, onUnlink, onClose })
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden flex flex-col max-h-[80vh]">
+      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[85vh]">
         {/* Header */}
-        <div className="px-6 py-4 bg-gray-50 border-b border-gray-100 flex justify-between items-start shrink-0">
+        <div className="px-8 py-6 bg-white border-b border-gray-100 flex justify-between items-start shrink-0">
           <div>
-            <h2 className="text-lg font-bold text-gray-900">Linked Transactions</h2>
-            <p className="text-xs text-gray-400 mt-0.5">{billAmountLabel}</p>
+            <h2 className="text-xl font-black text-gray-900">Linked Transactions</h2>
+            <p className="text-sm font-medium text-gray-500 mt-1">{billAmountLabel}</p>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 rounded-lg">
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-900 bg-gray-50 hover:bg-gray-100 p-2.5 rounded-xl transition">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
           </button>
         </div>
 
         {/* Warning banner */}
-        <div className="px-5 py-2.5 bg-amber-50 border-b border-amber-100 flex items-center gap-2 shrink-0">
-          <svg className="w-4 h-4 text-amber-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-          <p className="text-xs font-semibold text-amber-700">Unlink all transactions to enable editing or deleting this bill.</p>
+        <div className="mx-8 mt-6 px-5 py-4 bg-amber-50 rounded-2xl flex items-start gap-3 shrink-0 border border-amber-100 shadow-sm">
+          <svg className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+          <p className="text-[13px] font-bold text-amber-800 leading-relaxed">System Locked: Unlink all transactions attached below to safely edit or delete this generated bill.</p>
         </div>
 
         {/* Transaction list */}
-        <div className="divide-y divide-gray-100 overflow-y-auto flex-1">
+        <div className="divide-y divide-gray-100 overflow-y-auto flex-1 mt-2 px-8 mb-4">
           {linkedTxs.length === 0 ? (
-            <p className="text-center text-sm text-gray-400 py-10">No linked transactions.</p>
+            <p className="text-center text-sm font-medium text-gray-400 py-12 bg-gray-50/50 rounded-2xl border border-dashed mt-4">No linked transactions.</p>
           ) : linkedTxs.map(tx => {
             const amtF = Number(tx.amount?.toString().replace(/[^0-9.,-]/g, '').replace(',', '.')) || 0;
             const isPos = amtF > 0;
             const paidAmt = tx.billAmounts?.[bill.id];
             const isProcessing = unlinking === tx.id;
+            
+            const fmtDate = tx.dateStr && tx.dateStr.includes('-')
+              ? tx.dateStr.split('-').reverse().join('-')
+              : (tx.dateStr || `${tx.month}/${tx.year}`);
+
             return (
-              <div key={tx.id} className="px-5 py-4 flex items-start justify-between gap-4">
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-bold text-gray-800 truncate">{tx.name || 'Transaction'}</p>
-                  <p className="text-xs text-gray-400 mt-0.5">
-                    {tx.dateStr || `${tx.month}/${tx.year}`}
-                    <span className="mx-2 text-gray-200">•</span>
-                    <span className={`font-black ${isPos ? 'text-green-600' : 'text-gray-700'}`}>{tx.amount}</span>
+              <div key={tx.id} className="py-6 flex items-start justify-between gap-6 group">
+                <div className="flex-1 min-w-0 flex flex-col gap-2">
+                  <p className="text-[15px] font-black text-gray-900 truncate leading-tight">{tx.name || 'Transaction'}</p>
+                  
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <span className="text-xs font-semibold text-gray-400">{fmtDate}</span>
+                    <span className={`text-sm font-black ${isPos ? 'text-green-600' : 'text-gray-900'}`}>{tx.amount}</span>
                     {paidAmt !== undefined && (
-                      <span className="ml-2 text-blue-500 font-semibold">€ {Number(paidAmt).toFixed(2)} applied to this bill</span>
+                      <span className="text-[11px] font-bold text-blue-600 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-lg shadow-sm">
+                        € {Number(paidAmt).toFixed(2)} applied
+                      </span>
                     )}
-                  </p>
+                  </div>
+
                   {tx.rawBankDescription && (
-                    <p className="text-[11px] text-gray-300 italic mt-0.5 truncate">{tx.rawBankDescription}</p>
+                    <p className="text-[11px] text-gray-400 font-medium italic truncate mt-1">{tx.rawBankDescription}</p>
                   )}
                 </div>
                 <button
                   onClick={() => doUnlink(tx.id)}
                   disabled={isProcessing}
-                  className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-red-600 border border-red-200 rounded-xl hover:bg-red-50 disabled:opacity-50 transition"
+                  className="shrink-0 flex items-center gap-2 px-4 py-2 text-sm font-bold text-red-600 bg-white border-2 border-red-100 rounded-xl hover:bg-red-50 hover:border-red-200 disabled:opacity-50 transition drop-shadow-sm self-center"
                 >
                   {isProcessing ? (
-                    <svg className="w-3.5 h-3.5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" strokeWidth={3} strokeOpacity={0.3} /><path strokeLinecap="round" strokeWidth={3} d="M12 2a10 10 0 0110 10" /></svg>
+                    <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" strokeWidth={3} strokeOpacity={0.3} /><path strokeLinecap="round" strokeWidth={3} d="M12 2a10 10 0 0110 10" /></svg>
                   ) : (
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg>
                   )}
                   Unlink
                 </button>
@@ -106,9 +114,9 @@ function LinkedTxsModal({ bill, linkedTxs, billAmountLabel, onUnlink, onClose })
           })}
         </div>
 
-        <div className="px-5 pb-4 pt-3 border-t border-gray-100 shrink-0">
-          <button onClick={onClose} className="w-full py-2 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">
-            Close
+        <div className="px-8 pb-8 pt-4 border-t border-gray-50 bg-white shrink-0">
+          <button onClick={onClose} className="w-full py-3.5 text-[15px] font-black text-gray-600 hover:text-gray-900 bg-white border-2 border-gray-200 rounded-2xl hover:bg-gray-50 transition shadow-sm">
+            Close Menu
           </button>
         </div>
       </div>
