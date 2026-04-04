@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { getProviders, getMembers, getGeneratedBills, getTransactions, saveBulkTransactions, generateDueBills } from '../services/billService';
+import { getProviders, getMembers, getBills, getTransactions, saveBulkTransactions } from '../services/billService';
 import { CsvUploader } from '../components/imports/CsvUploader';
 import { ColumnMapper } from '../components/imports/ColumnMapper';
 import { MatchingEngine } from '../components/imports/MatchingEngine';
@@ -18,8 +18,7 @@ export default function Imports() {
   const [csvFields, setCsvFields] = useState([]);
   const [allProviders, setAllProviders] = useState([]);
   const [allMembers, setAllMembers] = useState([]);
-  const [unpaidBills, setUnpaidBills] = useState([]);
-  const [allBills, setAllBills] = useState([]);
+  const [bills, setBills] = useState([]);   // all manually created bills
 
   const [mappedData, setMappedData] = useState([]);
 
@@ -48,30 +47,18 @@ export default function Imports() {
   async function fetchBills() {
     try {
       setLoadingBills(true);
-      await generateDueBills(userProfile.householdId);
-      const providers = await getProviders(userProfile.householdId);
-      const members = await getMembers(userProfile.householdId);
-      const generatedBills = await getGeneratedBills(userProfile.householdId);
-      const allTxs = await getTransactions(userProfile.householdId);
-
-      const unpaid = generatedBills.filter(bill => {
-        const matchingTxs = allTxs.filter(t => t.billId === bill.id && t.status === 'cleared');
-        const sumPaid = matchingTxs.reduce((acc, t) => acc + (t.actualAmount || 0), 0);
-        return sumPaid < bill.expectedAmount * 0.95; // Account for tolerance logic
-      });
-
-      // Sort unpaid chronologically (oldest debts first)
-      unpaid.sort((a, b) => {
-         if (a.year !== b.year) return a.year - b.year;
-         return a.month - b.month;
-      });
-
+      const [providers, members, allBills] = await Promise.all([
+        getProviders(userProfile.householdId),
+        getMembers(userProfile.householdId),
+        getBills(userProfile.householdId),
+      ]);
+      // Pass only non-cleared bills for sweep suggestions
+      const activeBills = allBills.filter(b => b.status !== 'cleared');
       setAllProviders(providers);
       setAllMembers(members);
-      setAllBills(generatedBills);
-      setUnpaidBills(unpaid);
-    } catch (e) {
-      addToast("Failed to fetch pending bills.", "error");
+      setBills(activeBills);
+    } catch {
+      addToast('Failed to fetch bills.', 'error');
     } finally {
       setLoadingBills(false);
     }
@@ -163,7 +150,7 @@ export default function Imports() {
             importedData={mappedData} 
             providers={allProviders}
             members={allMembers}
-            unpaidBills={unpaidBills} 
+            bills={bills}
             onComplete={handleComplete} 
           />)
         )}

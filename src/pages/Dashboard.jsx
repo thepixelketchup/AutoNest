@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { getProviders, getMembers, getGeneratedBills, generateDueBills, getTransactions } from '../services/billService';
+import { getProviders, getMembers, getBills, getTransactions, getBillPeriodMonthYear } from '../services/billService';
 import { useToast } from '../hooks/useToast';
 
 // ── helpers ─────────────────────────────────────────────────────────────────
@@ -80,10 +80,9 @@ export default function Dashboard() {
   async function fetchData() {
     try {
       setLoading(true);
-      await generateDueBills(userProfile.householdId);
       const [p, b, t, m] = await Promise.all([
         getProviders(userProfile.householdId),
-        getGeneratedBills(userProfile.householdId),
+        getBills(userProfile.householdId),
         getTransactions(userProfile.householdId),
         getMembers(userProfile.householdId),
       ]);
@@ -107,9 +106,10 @@ export default function Dashboard() {
 
   // ── Filter helpers ─────────────────────────────────────────────────────────
   const billInPeriod = (bill) => {
-    if (selectedPeriod === 'month') return bill.month === thisMonth && bill.year === thisYear;
+    const { month: bm, year: by } = getBillPeriodMonthYear(bill);
+    if (selectedPeriod === 'month') return bm === thisMonth && by === thisYear;
     if (selectedPeriod === 'all')   return true;
-    return bill.year === parseInt(selectedPeriod, 10);
+    return by === parseInt(selectedPeriod, 10);
   };
   const txInPeriod = (tx) => {
     const d = tx.dateStr ? new Date(tx.dateStr) : null;
@@ -130,13 +130,13 @@ export default function Dashboard() {
     return { ...bill, providerName: provider?.name || '?', category: provider?.category || '', tx };
   });
 
-  const totalExpected  = enrichedBills.reduce((s, b) => s + (b.expectedAmount || 0), 0);
+  const totalExpected  = enrichedBills.reduce((s, b) => s + (b.amount || 0), 0);
   const totalPaid      = enrichedBills.filter(b => b.tx).reduce((s, b) => s + (b.tx?.actualAmount || 0), 0);
-  const totalRemaining = enrichedBills.filter(b => !b.tx).reduce((s, b) => s + (b.expectedAmount || 0), 0);
+  const totalRemaining = enrichedBills.filter(b => !b.tx).reduce((s, b) => s + (b.amount || 0), 0);
   const clearedCount   = enrichedBills.filter(b => b.tx).length;
   const paidPct        = totalExpected > 0 ? (totalPaid / totalExpected) * 100 : 0;
   const overdueBills   = selectedPeriod === 'month'
-    ? enrichedBills.filter(b => !b.tx && b.expectedDay < todayDay)
+    ? enrichedBills.filter(b => !b.tx && b.billingPeriod?.type === 'month' && b.status === 'overdue')
     : [];
 
   // Contributions
@@ -146,9 +146,9 @@ export default function Dashboard() {
   // Provider spend breakdown
   const providerSpend = providers.map(p => {
     const pBills = enrichedBills.filter(b => b.providerId === p.id);
-    const expected = pBills.reduce((s, b) => s + (b.expectedAmount || 0), 0);
+    const expected = pBills.reduce((s, b) => s + (b.amount || 0), 0);
     const paid     = pBills.filter(b => b.tx).reduce((s, b) => s + (b.tx?.actualAmount || 0), 0);
-    const missed   = pBills.filter(b => !b.tx).length;
+    const missed   = pBills.filter(b => !b.tx && b.status !== 'cleared').length;
     return { id: p.id, name: p.name, category: p.category, expected, paid, missed };
   }).filter(p => p.expected > 0).sort((a,b) => b.expected - a.expected);
 
@@ -173,7 +173,7 @@ export default function Dashboard() {
         const mn  = d.getMonth() + 1;
         const yr  = d.getFullYear();
         const b   = allBills.filter(x => x.month === mn && x.year === yr);
-        const exp = b.reduce((s, x) => s + (x.expectedAmount || 0), 0);
+        const exp = b.reduce((s, x) => s + (x.amount || 0), 0);
         const paid= allTxs.filter(t => b.some(x => x.id === t.billId) && t.status === 'cleared').reduce((s,t) => s + (t.actualAmount||0), 0);
         return { label: `${MONTHS[mn-1]} ${yr !== thisYear ? yr : ''}`.trim(), exp, paid, isCurrent: mn === thisMonth && yr === thisYear };
       });
@@ -182,7 +182,7 @@ export default function Dashboard() {
       // All years: one bar per year
       return availableYears.slice().reverse().map(yr => {
         const b   = allBills.filter(x => x.year === yr);
-        const exp = b.reduce((s, x) => s + (x.expectedAmount || 0), 0);
+        const exp = b.reduce((s, x) => s + (x.amount || 0), 0);
         const paid= allTxs.filter(t => b.some(x => x.id === t.billId) && t.status === 'cleared').reduce((s,t) => s + (t.actualAmount||0), 0);
         return { label: String(yr), exp, paid, isCurrent: yr === thisYear };
       });
@@ -192,7 +192,7 @@ export default function Dashboard() {
     return Array.from({ length: 12 }, (_, i) => {
       const mn  = i + 1;
       const b   = allBills.filter(x => x.month === mn && x.year === yr);
-      const exp = b.reduce((s, x) => s + (x.expectedAmount || 0), 0);
+      const exp = b.reduce((s, x) => s + (x.amount || 0), 0);
       const paid= allTxs.filter(t => b.some(x => x.id === t.billId) && t.status === 'cleared').reduce((s,t) => s + (t.actualAmount||0), 0);
       return { label: MONTHS[i], exp, paid, isCurrent: mn === thisMonth && yr === thisYear };
     });
@@ -508,7 +508,7 @@ export default function Dashboard() {
                         <p className="text-sm font-semibold text-gray-800">{b.providerName}</p>
                         <p className="text-[10px] text-gray-400">Day {b.expectedDay}</p>
                       </div>
-                      <p className="text-sm font-black text-amber-600">{fmt(b.expectedAmount)}</p>
+                      <p className="text-sm font-black text-amber-600">{fmt(b.amount)}</p>
                     </div>
                   ))}
                 </div>

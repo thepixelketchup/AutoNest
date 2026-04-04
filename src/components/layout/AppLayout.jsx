@@ -6,12 +6,13 @@ export default function AppLayout() {
   const { logout, userProfile } = useAuth();
   
   const navItems = [
-    { name: 'Dashboard', path: '/' },
-    { name: 'Reports', path: '/reports' },
-    { name: 'Transactions', path: '/transactions' },
-    { name: 'Import Statement', path: '/imports' },
-    { name: 'Providers', path: '/providers' },
-    { name: 'Members', path: '/members' },
+    { name: 'Dashboard',        path: '/'            },
+    { name: 'Bills',            path: '/bills'       },
+    { name: 'Reports',          path: '/reports'     },
+    { name: 'Transactions',     path: '/transactions'},
+    { name: 'Import Statement', path: '/imports'     },
+    { name: 'Providers',        path: '/providers'   },
+    { name: 'Members',          path: '/members'     },
   ];
 
   return (

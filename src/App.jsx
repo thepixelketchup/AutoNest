@@ -11,6 +11,7 @@ import Imports from './pages/Imports';
 import Transactions from './pages/Transactions';
 import Providers from './pages/Providers';
 import Members from './pages/Members';
+import Bills from './pages/Bills';
 import MatchReport from './pages/MatchReport';
 
 function App() {
@@ -37,6 +38,7 @@ function App() {
             } 
           >
             <Route path="/" element={<Dashboard />} />
+            <Route path="/bills" element={<Bills />} />
             <Route path="/transactions" element={<Transactions />} />
             <Route path="/reports" element={<MatchReport />} />
             <Route path="/imports" element={<Imports />} />

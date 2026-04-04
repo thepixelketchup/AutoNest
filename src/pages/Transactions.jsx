@@ -1,477 +1,952 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../hooks/useAuth';
-import { getTransactions, getProviders, getMembers, getGeneratedBills, generateDueBills, updateTransaction, deleteTransaction, updateBulkTransactions } from '../services/billService';
+import {
+  getTransactions, getProviders, getMembers, getBills,
+  updateTransaction, deleteTransaction,
+  linkTransactionToBill, unlinkTransactionFromBill,
+  getBillPeriodLabel,
+} from '../services/billService';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { useToast } from '../hooks/useToast';
-import { SweepReviewModal } from '../components/ledger/SweepReviewModal';
 
-export default function Transactions() {
-  const { userProfile } = useAuth();
-  const { addToast } = useToast();
-  
-  const [transactions, setTransactions] = useState([]);
-  const [providers, setProviders] = useState([]);
-  const [members, setMembers] = useState([]);
-  const [allBills, setAllBills] = useState([]);
-  const [unpaidBills, setUnpaidBills] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState('unmatched'); // 'matched' | 'unmatched'
-
-function parseAmount(amountStr) {
-  if (!amountStr) return 0;
-  let str = amountStr.toString().trim();
-  str = str.replace(/[^0-9.,-]/g, "");
-  const lastComma = str.lastIndexOf(',');
-  const lastDot = str.lastIndexOf('.');
-  if (lastComma > lastDot) {
-     str = str.replace(/\./g, "").replace(/,/g, ".");
-  } else if (lastDot > lastComma) {
-     str = str.replace(/,/g, "");
-  }
-  return parseFloat(str) || 0;
+function parseAmount(str) {
+  if (!str) return 0;
+  let s = str.toString().trim().replace(/[^0-9.,-]/g, '');
+  const lc = s.lastIndexOf(','), ld = s.lastIndexOf('.');
+  if (lc > ld) s = s.replace(/\./g, '').replace(/,/g, '.');
+  else if (ld > lc) s = s.replace(/,/g, '');
+  return parseFloat(s) || 0;
 }
 
-  const [linkModalTx, setLinkModalTx] = useState(null);
-  const [linkMode, setLinkMode] = useState('bill'); // 'bill' | 'member' — for negative txs
-  const [selectedBillId, setSelectedBillId] = useState('');
-  const [selectedMemberId, setSelectedMemberId] = useState('');
-  const [pendingProposals, setPendingProposals] = useState(null);
-  useEffect(() => {
-    if (userProfile?.householdId) {
-      fetchData();
+function scoreBillForTx(bill, txDate) {
+  const bp = bill.billingPeriod;
+  if (!bp) {
+    const bStart = new Date(bill.year, (bill.month || 1) - 1, 1);
+    if (txDate >= bStart && txDate <= new Date(bill.year, bill.month || 1, 0)) return 100;
+    return Math.max(0, 60 - Math.abs(txDate - bStart) / 86400000);
+  }
+  if (bp.type === 'month') {
+    const bStart = new Date(bp.year, bp.month - 1, 1);
+    if (txDate >= bStart && txDate <= new Date(bp.year, bp.month, 0)) return 100;
+    return Math.max(0, 60 - Math.abs(txDate - bStart) / 86400000);
+  }
+  if (bp.type === 'dateRange') {
+    const s = new Date(bp.dateFrom), e = new Date(bp.dateTo);
+    if (txDate >= s && txDate <= e) return 100;
+    return Math.max(0, 60 - Math.min(Math.abs(txDate - s), Math.abs(txDate - e)) / 86400000);
+  }
+  if (bp.type === 'specificDate')
+    return Math.max(0, 100 - Math.abs(txDate - new Date(bp.specificDate)) / 86400000);
+  return 0;
+}
+
+// ── Shared bill multi-select panel (used by both LinkModal and SweepStepModal) ─
+function BillSelector({ allBills, providers, txDate, selections, setSelections, txAmount, existingBillIds = [], existingAllocated = 0 }) {
+  // Exclude already-linked bills (they can't be double-linked)
+  const activeBills = allBills
+    .filter(b => b.status !== 'cleared' && !existingBillIds.includes(b.id))
+    .map(b => ({ ...b, score: scoreBillForTx(b, txDate) }))
+    .sort((a, b) => b.score - a.score);
+
+  const txAmt          = Math.abs(Number(txAmount) || 0);
+  // Available budget = total tx - what's already allocated via existing links
+  const availableBudget = txAmt > 0 ? Math.max(0, txAmt - existingAllocated) : txAmt;
+  const totalNew        = Object.values(selections).reduce((s, v) => s + (Number(v) || 0), 0);
+  const isOverBudget    = totalNew > availableBudget + 0.005; // 0.5¢ tolerance
+  // Progress bar: show existing + new vs total
+  const totalAllocated  = existingAllocated + totalNew;
+  const budgetLeft      = txAmt - totalAllocated;
+
+  function toggleBill(billId, billRemaining) {
+    setSelections(prev => {
+      const next = { ...prev };
+      if (next[billId] !== undefined) {
+        delete next[billId];
+      } else {
+        const alreadyNewAlloc = Object.values(prev).reduce((s, v) => s + (Number(v) || 0), 0);
+        const budget = availableBudget > 0 ? Math.max(0, availableBudget - alreadyNewAlloc) : billRemaining;
+        next[billId] = Math.min(budget, billRemaining);
+      }
+      return next;
+    });
+  }
+
+  if (activeBills.length === 0) {
+    return (
+      <p className="text-sm text-gray-400 text-center py-6 bg-gray-50 rounded-xl">
+        {existingBillIds.length > 0 && allBills.filter(b => b.status !== 'cleared').every(b => existingBillIds.includes(b.id))
+          ? 'All active bills are already linked to this transaction.'
+          : 'No active bills. Create bills in the Bills page first.'}
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {/* Budget tracker strip */}
+      {txAmt > 0 && (
+        <div className={`rounded-xl px-3.5 py-2.5 flex items-center justify-between text-xs font-semibold gap-3 ${
+          isOverBudget ? 'bg-red-50 border border-red-200' : 'bg-gray-50 border border-gray-200'
+        }`}>
+          <div className="flex items-center gap-2 min-w-0">
+            <span className={isOverBudget ? 'text-red-600' : 'text-gray-500'}>
+              {isOverBudget ? '⚠ Over budget!' : existingAllocated > 0 ? 'Remaining budget:' : 'Transaction budget:'}
+            </span>
+            <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden min-w-[60px]">
+              {/* Existing allocation (blue) */}
+              <div className="h-full flex">
+                <div className="bg-blue-300 h-full" style={{ width: `${txAmt > 0 ? Math.min(100, (existingAllocated / txAmt) * 100) : 0}%` }} />
+                <div className={`h-full ${isOverBudget ? 'bg-red-500' : 'bg-blue-500'}`}
+                  style={{ width: `${txAmt > 0 ? Math.min(100, (totalNew / txAmt) * 100) : 0}%` }} />
+              </div>
+            </div>
+          </div>
+          <div className="shrink-0 text-right">
+            <span className={isOverBudget ? 'text-red-700 font-black' : 'text-gray-700'}>
+              € {totalAllocated.toFixed(2)}
+            </span>
+            <span className="text-gray-400 font-normal"> / € {txAmt.toFixed(2)}</span>
+            {existingAllocated > 0 && (
+              <div className="text-[10px] text-blue-500 font-normal">€ {availableBudget.toFixed(2)} left to allocate</div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Bill list */}
+      <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+        {activeBills.map(bill => {
+          const prov      = providers.find(p => p.id === bill.providerId);
+          const isChk     = selections[bill.id] !== undefined;
+          const totalDue  = (bill.amount || 0) + (bill.lateFee || 0);
+          const remaining = Math.max(0, totalDue - (bill.totalPaid || 0));
+          return (
+            <div key={bill.id}
+              className={`rounded-xl border p-3 cursor-pointer transition-all ${
+                isChk ? 'border-blue-300 bg-blue-50' : 'border-gray-200 hover:border-blue-200 hover:bg-gray-50'
+              }`}>
+              <div className="flex items-center gap-3" onClick={() => toggleBill(bill.id, remaining)}>
+                <input type="checkbox" readOnly checked={isChk} className="rounded accent-blue-600 w-4 h-4 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-gray-800 truncate">{prov?.name || '—'}</p>
+                  <p className="text-[11px] text-gray-400">{getBillPeriodLabel(bill)}</p>
+                </div>
+                <div className="text-right shrink-0">
+                  <p className="text-sm font-black text-gray-700">€ {totalDue.toFixed(2)}</p>
+                  {(bill.lateFee || 0) > 0 && (
+                    <p className="text-[10px] text-amber-500">€ {(bill.amount||0).toFixed(2)} + € {(bill.lateFee||0).toFixed(2)} late fee</p>
+                  )}
+                  {remaining < totalDue && (
+                    <p className="text-[10px] text-green-600">Remaining: € {remaining.toFixed(2)}</p>
+                  )}
+                  <span className={`text-[10px] font-bold ${
+                    bill.status === 'overdue' ? 'text-red-500' :
+                    bill.status === 'partial'  ? 'text-blue-500' : 'text-gray-400'
+                  }`}>{bill.status}</span>
+                </div>
+              </div>
+
+              {isChk && (
+                <div className="mt-2.5 pt-2.5 border-t border-blue-200 flex items-center gap-2">
+                  <label className="text-[11px] text-blue-600 font-bold shrink-0">Amount paid:</label>
+                  <div className="relative flex-1">
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs font-bold">€</span>
+                    <input
+                      type="number" step="0.01" min="0"
+                      max={availableBudget > 0 ? availableBudget : undefined}
+                      value={selections[bill.id]}
+                      onChange={e => setSelections(prev => ({ ...prev, [bill.id]: parseFloat(e.target.value) || 0 }))}
+                      className={`w-full border rounded-lg pl-6 pr-2 py-1.5 text-sm focus:ring-1 outline-none ${
+                        isOverBudget ? 'border-red-300 focus:ring-red-400' : 'border-blue-200 focus:ring-blue-400'
+                      }`}
+                      onClick={e => e.stopPropagation()}
+                    />
+                  </div>
+                  {availableBudget > 0 && !isOverBudget && (
+                    <button
+                      type="button"
+                      onClick={e => {
+                        e.stopPropagation();
+                        setSelections(prev => {
+                          const newAlloc = Object.values(prev).reduce((s, v, _, arr) => s + (Number(v) || 0), 0) - (Number(prev[bill.id]) || 0);
+                          return { ...prev, [bill.id]: Math.min(remaining, Math.max(0, availableBudget - newAlloc)) };
+                        });
+                      }}
+                      className="shrink-0 text-[10px] font-bold text-blue-600 bg-blue-50 border border-blue-200 rounded px-1.5 py-1 hover:bg-blue-100 transition"
+                    >Max</button>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Over-budget error */}
+      {isOverBudget && (
+        <div className="flex items-center gap-2 px-3 py-2 bg-red-50 border border-red-200 rounded-xl text-xs font-semibold text-red-700">
+          <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" /></svg>
+          New allocation € {totalNew.toFixed(2)} exceeds remaining budget € {availableBudget.toFixed(2)}. Reduce amounts.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── LinkModal (manual one-off linking) ────────────────────────────────────────
+function LinkModal({ tx, allBills, providers, members, onSave, onClose, getAllocated }) {
+  const amountFloat    = parseAmount(tx.amount);
+  const isIncome       = amountFloat > 0;
+  // Derive existing bill IDs from ALL sources — billIds array, legacy billId field, AND
+  // keys of billAmounts map. This guards against any sync lag between the two fields.
+  const existingBillIds = [
+    ...(tx.billIds || (tx.billId ? [tx.billId] : [])),
+    ...Object.keys(tx.billAmounts || {}),
+  ].filter((v, i, a) => a.indexOf(v) === i); // deduplicate
+  // How much is already linked; passed in from parent so it uses the same helper
+  const existingAllocated = getAllocated ? getAllocated(tx) : 0;
+
+  const [linkMode, setLinkMode]     = useState('bill');
+  const [selectedMemberId, setSMId] = useState('');
+  const [selections, setSelections] = useState({});
+  const txDate = tx.dateStr ? new Date(tx.dateStr) : new Date();
+
+  const availableBudget = Math.abs(amountFloat) - existingAllocated;
+  const canSave = isIncome
+    ? !!selectedMemberId
+    : linkMode === 'member'
+      ? !!selectedMemberId
+      : Object.keys(selections).length > 0 && !(() => {
+          const newAlloc = Object.values(selections).reduce((s, v) => s + (Number(v) || 0), 0);
+          return newAlloc > availableBudget + 0.005;
+        })();
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden max-h-[90vh] flex flex-col">
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center shrink-0">
+          <div>
+            <h2 className="text-lg font-bold text-gray-900">Link Transaction</h2>
+            <p className="text-xs text-gray-400 mt-0.5 truncate max-w-sm">
+              {tx.name} · <span className={amountFloat > 0 ? 'text-green-600 font-bold' : 'text-red-500 font-bold'}>{tx.amount}</span>
+              <span className="ml-2 text-gray-300">·</span>
+              <span className="ml-2 text-gray-400">{tx.dateStr || ''}</span>
+            </p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 p-1 rounded-lg">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4 overflow-y-auto">
+          {isIncome ? (
+            <>
+              <p className="text-sm text-green-700 font-semibold bg-green-50 rounded-lg px-3 py-2">
+                ↑ Positive amount — attribute as a member contribution
+              </p>
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-gray-500 mb-1.5">Select Contributor</label>
+                <select value={selectedMemberId} onChange={e => setSMId(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                  <option value="">— Select Member —</option>
+                  {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
+                {[['bill', 'Link to Bills'], ['member', 'Deduct from Member']].map(([v, l]) => (
+                  <button key={v} type="button"
+                    onClick={() => { setLinkMode(v); setSelections({}); setSMId(''); }}
+                    className={`flex-1 py-1.5 text-sm font-bold rounded-lg transition-all ${linkMode === v ? 'bg-white shadow text-blue-700' : 'text-gray-500'}`}>{l}
+                  </button>
+                ))}
+              </div>
+              {linkMode === 'bill' ? (
+                <>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-gray-500">
+                    Select Bills {Object.keys(selections).length > 0 && <span className="text-blue-600">({Object.keys(selections).length} selected)</span>}
+                  </label>
+                  <BillSelector allBills={allBills} providers={providers} txDate={txDate}
+                    txAmount={Math.abs(amountFloat)}
+                    existingBillIds={existingBillIds}
+                    existingAllocated={existingAllocated}
+                    selections={selections} setSelections={setSelections} />
+                </>
+              ) : (
+                <>
+                  <p className="text-sm text-red-600 font-semibold bg-red-50 rounded-lg px-3 py-2">↓ Deduct from a member's balance</p>
+                  <select value={selectedMemberId} onChange={e => setSMId(e.target.value)}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                    <option value="">— Select Member —</option>
+                    {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  </select>
+                </>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="px-6 pb-5 pt-3 border-t border-gray-100 flex justify-end gap-3 shrink-0">
+          <button onClick={onClose} className="px-4 py-2 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50">Cancel</button>
+          <button disabled={!canSave}
+            onClick={() => onSave({ isIncome, linkMode, selectedMemberId, selections })}
+            className="px-5 py-2 text-sm font-bold text-white bg-blue-600 rounded-xl hover:bg-blue-700 disabled:opacity-40 transition shadow-sm">
+            Save Link
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── SweepStepModal (one-by-one guided sweep) ──────────────────────────────────
+function SweepStepModal({ proposal, stepNum, totalSteps, allBills, providers, members, onApprove, onSkip, onClose }) {
+  const amtF    = parseAmount(proposal.txAmount);
+  const isIncome = amtF > 0;
+
+  // Additionally show partial status banner if tx already has links
+  const hasExistingLinks = (proposal.updates?.billId || (proposal.updates?.billIds?.length > 0));
+  const isContrib   = proposal.updates?.status === 'contribution';
+  const isDeduction = isContrib && (proposal.updates?.actualAmount || 0) < 0;
+
+  // Pre-populate mode from proposal
+  const defaultMode = isContrib ? 'member' : 'bill';
+  const [linkMode, setLinkMode]     = useState(defaultMode);
+  const [selectedMemberId, setSMId] = useState(isContrib ? (proposal.updates?.memberId || '') : '');
+
+  // Pre-select the proposed bill
+  const [selections, setSelections] = useState(() => {
+    if (!isContrib && proposal.updates?.billId) {
+      return { [proposal.updates.billId]: proposal.updates.actualAmount || Math.abs(amtF) };
     }
-  }, [userProfile?.householdId]);
+    return {};
+  });
+
+  const txDate = proposal.txDate ? new Date(proposal.txDate) : new Date();
+
+  const canApprove = isIncome
+    ? !!selectedMemberId
+    : linkMode === 'member'
+      ? !!selectedMemberId
+      : Object.keys(selections).length > 0 && !(() => {
+          const txAmt = Math.abs(amtF);
+          const allocated = Object.values(selections).reduce((s, v) => s + (Number(v) || 0), 0);
+          return allocated > txAmt + 0.005;
+        })();
+
+  const progress = (stepNum / totalSteps) * 100;
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden max-h-[90vh] flex flex-col">
+
+        {/* Header */}
+        <div className="px-6 pt-5 pb-4 border-b border-gray-100 bg-gray-50 shrink-0">
+          <div className="flex justify-between items-start mb-3">
+            <div>
+              <div className="flex items-center gap-2 mb-1.5">
+                <span className="text-[11px] font-black text-blue-700 bg-blue-100 px-2.5 py-0.5 rounded-full">
+                  {stepNum} / {totalSteps}
+                </span>
+                <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Auto-Sweep</span>
+              </div>
+              <h2 className="text-lg font-bold text-gray-900">Review & Approve</h2>
+              <p className="text-xs text-gray-400 mt-0.5 truncate max-w-xs">
+                {proposal.txName}
+                <span className="mx-1.5 text-gray-300">·</span>
+                <span className={amtF > 0 ? 'text-green-600 font-bold' : 'text-red-500 font-bold'}>{proposal.txAmount}</span>
+                <span className="mx-1.5 text-gray-300">·</span>
+                {proposal.txDate}
+              </p>
+            </div>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 rounded-lg mt-0.5">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+          </div>
+
+          {/* Progress bar */}
+          <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
+            <div className="h-full bg-blue-500 rounded-full transition-all duration-500" style={{ width: `${progress}%` }} />
+          </div>
+        </div>
+
+        {/* Suggested match banner */}
+        <div className="px-6 py-2.5 bg-amber-50 border-b border-amber-100 shrink-0 flex items-center gap-2">
+          <svg className="w-4 h-4 text-amber-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+          <p className="text-xs font-semibold text-amber-700">
+            Suggested: <span className="font-black">{proposal.billName}</span>
+            <span className="ml-2 font-normal text-amber-600">— change below if needed</span>
+          </p>
+        </div>
+
+        {/* Editable link section */}
+        <div className="p-5 space-y-4 overflow-y-auto flex-1">
+          {isIncome ? (
+            <>
+              <p className="text-sm text-green-700 font-semibold bg-green-50 rounded-lg px-3 py-2">
+                ↑ Positive amount — attribute as a member contribution
+              </p>
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-gray-500 mb-1.5">Select Contributor</label>
+                <select value={selectedMemberId} onChange={e => setSMId(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                  <option value="">— Select Member —</option>
+                  {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
+                {[['bill', 'Link to Bills'], ['member', 'Deduct from Member']].map(([v, l]) => (
+                  <button key={v} type="button"
+                    onClick={() => { setLinkMode(v); setSelections({}); setSMId(''); }}
+                    className={`flex-1 py-1.5 text-sm font-bold rounded-lg transition-all ${linkMode === v ? 'bg-white shadow text-blue-700' : 'text-gray-500'}`}>
+                    {l}
+                  </button>
+                ))}
+              </div>
+
+              {linkMode === 'bill' ? (
+                <>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-gray-500">
+                    Select Bills{Object.keys(selections).length > 0 && <span className="text-blue-600 ml-1">({Object.keys(selections).length} selected)</span>}
+                  </label>
+                  <BillSelector
+                    allBills={allBills}
+                    providers={providers}
+                    txDate={txDate}
+                    txAmount={Math.abs(amtF)}
+                    selections={selections}
+                    setSelections={setSelections}
+                  />
+                </>
+              ) : (
+                <>
+                  <p className="text-sm text-red-600 font-semibold bg-red-50 rounded-lg px-3 py-2">↓ Deduct from a member's balance</p>
+                  <select value={selectedMemberId} onChange={e => setSMId(e.target.value)}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                    <option value="">— Select Member —</option>
+                    {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  </select>
+                </>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Footer actions */}
+        <div className="px-6 pb-5 pt-3 border-t border-gray-100 flex items-center justify-between shrink-0">
+          <div className="flex gap-2">
+            <button onClick={onClose}
+              className="px-3 py-2 text-xs font-semibold text-gray-400 hover:text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">
+              Stop
+            </button>
+            <button onClick={onSkip}
+              className="px-4 py-2 text-sm font-semibold text-gray-500 border border-gray-200 rounded-xl hover:bg-gray-50 transition">
+              Skip →
+            </button>
+          </div>
+          <button
+            disabled={!canApprove}
+            onClick={() => onApprove({ isIncome, linkMode, selectedMemberId, selections })}
+            className="px-6 py-2.5 text-sm font-bold text-white bg-blue-600 rounded-xl hover:bg-blue-700 disabled:opacity-40 transition shadow-sm flex items-center gap-2"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" /></svg>
+            Approve & Next
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main Page ─────────────────────────────────────────────────────────────────
+export default function Transactions() {
+  const { userProfile } = useAuth();
+  const { addToast }    = useToast();
+
+  const [transactions, setTransactions] = useState([]);
+  const [providers,    setProviders]    = useState([]);
+  const [members,      setMembers]      = useState([]);
+  const [allBills,     setAllBills]     = useState([]);
+  const [loading,      setLoading]      = useState(true);
+  const [tab,          setTab]          = useState('unmatched');
+  const [linkModalTx,  setLinkModalTx]  = useState(null);
+  const [search,       setSearch]       = useState('');
+
+  // Step-by-step sweep state
+  const [sweepQueue, setSweepQueue] = useState([]);
+  const [sweepStep,  setSweepStep]  = useState(0);
+  const sweeping = sweepQueue.length > 0 && sweepStep < sweepQueue.length;
+
+  useEffect(() => { if (userProfile?.householdId) fetchData(); }, [userProfile?.householdId]);
 
   async function fetchData() {
     try {
       setLoading(true);
-      await generateDueBills(userProfile.householdId);
-      const [fetchedTransactions, fetchedProviders, fetchedBills, fetchedMembers] = await Promise.all([
+      const [txs, provs, bills, mems] = await Promise.all([
         getTransactions(userProfile.householdId),
         getProviders(userProfile.householdId),
-        getGeneratedBills(userProfile.householdId),
-        getMembers(userProfile.householdId)
+        getBills(userProfile.householdId),
+        getMembers(userProfile.householdId),
       ]);
-      fetchedTransactions.sort((a,b) => new Date(b.dateStr) - new Date(a.dateStr));
-      
-      const unpaid = fetchedBills.filter(bill => {
-        const matchingTxs = fetchedTransactions.filter(t => t.billId === bill.id && t.status === 'cleared');
-        const sumPaid = matchingTxs.reduce((acc, t) => acc + (t.actualAmount || 0), 0);
-        return sumPaid < bill.expectedAmount * 0.95; 
-      });
-      unpaid.sort((a,b) => (a.year !== b.year ? a.year - b.year : a.month - b.month));
-      
-      setTransactions(fetchedTransactions);
-      setProviders(fetchedProviders);
-      setMembers(fetchedMembers);
-      setAllBills(fetchedBills);
-      setUnpaidBills(unpaid);
-    } catch (err) {
-      addToast("Failed to fetch transactions.", "error");
+      txs.sort((a, b) => new Date(b.dateStr || `${b.year}-${b.month}-01`) - new Date(a.dateStr || `${a.year}-${a.month}-01`));
+      setTransactions(txs);
+      setProviders(provs);
+      setAllBills(bills);
+      setMembers(mems);
+    } catch {
+      addToast('Failed to fetch transactions.', 'error');
     } finally {
       setLoading(false);
     }
   }
 
-  const handleUnmatch = async (tx) => {
-    if (window.confirm("Remove this transaction's mapping? It will appear back in Unmatched.")) {
-      try {
-        await updateTransaction(userProfile.householdId, tx.id, {
-           billId: null,
-           memberId: null,
-           status: 'pending_classification',
-           varianceReason: ''
-        });
-        addToast("Transaction unmapped successfully.");
-        fetchData();
-      } catch (err) {
-        addToast("Error unmapping transaction.", "error");
+  // ── Transaction classification helpers ──────────────────────────────────────
+  // How much of a tx has been allocated across all linked bills
+  function getAllocated(tx) {
+    // Only sum billAmounts — never fall back to actualAmount (it can be stale after unlinks)
+    const billAmounts = tx.billAmounts || {};
+    return Object.values(billAmounts).reduce((s, v) => s + Number(v || 0), 0);
+  }
+
+  const CENT = 0.01; // 1¢ tolerance
+  const isContributionTx = (t) => t.status === 'contribution';
+  const hasAnyBillLink   = (t) => (t.billIds?.length > 0) || (t.billId != null);
+  const isFullySettled   = (t) => {
+    if (!hasAnyBillLink(t)) return false;
+    const txAmt = Math.abs(parseAmount(t.amount));
+    return txAmt <= 0 || getAllocated(t) >= txAmt - CENT;
+  };
+  const isPartiallySettled = (t) => hasAnyBillLink(t) && !isFullySettled(t);
+
+  // Matched = fully settled bills OR contributions
+  // Unmatched = no links at all  OR partially settled (stays here so user can finish linking)
+  const matched   = transactions.filter(t => isContributionTx(t) || isFullySettled(t));
+  const unmatched = transactions.filter(t => !isContributionTx(t) && !isFullySettled(t));
+
+  const q = search.trim().toLowerCase();
+  const viewList = (tab === 'matched' ? matched : unmatched).filter(t =>
+    !q ||
+    (t.name || '').toLowerCase().includes(q) ||
+    (t.rawBankDescription || '').toLowerCase().includes(q)
+  );
+
+  // ── Save helper (shared by LinkModal + SweepStepModal) ────────────────────
+  async function executeSaveLink(txId, { isIncome, linkMode, selectedMemberId, selections }) {
+    const tx = transactions.find(t => t.id === txId);
+    const amountFloat = tx ? parseAmount(tx.amount) : 0;
+
+    if (isIncome) {
+      await updateTransaction(userProfile.householdId, txId, {
+        memberId: selectedMemberId, billId: null, billIds: [],
+        status: 'contribution', actualAmount: Math.abs(amountFloat), varianceReason: '',
+      });
+    } else if (linkMode === 'member') {
+      await updateTransaction(userProfile.householdId, txId, {
+        memberId: selectedMemberId, billId: null, billIds: [],
+        status: 'contribution', actualAmount: -Math.abs(amountFloat), varianceReason: 'Deduction',
+      });
+    } else {
+      for (const [billId, paidAmt] of Object.entries(selections)) {
+        await linkTransactionToBill(userProfile.householdId, billId, txId, Number(paidAmt));
       }
     }
-  };
+  }
 
-  const handleManualLink = async () => {
+  // ── Manual link (LinkModal) ────────────────────────────────────────────────
+  async function handleSaveLink(saveData) {
     const tx = linkModalTx;
     if (!tx) return;
-    const amountFloat = parseAmount(tx.amount);
-    const isIncome = amountFloat > 0;
-
     try {
-      if (isIncome) {
-        // Positive → Contribution
-        if (!selectedMemberId) return;
-        const actualAmount = Math.abs(amountFloat);
-        await updateTransaction(userProfile.householdId, tx.id, {
-           memberId: selectedMemberId, billId: null,
-           status: 'contribution', actualAmount, varianceReason: ''
-        });
-        addToast("Transaction attributed as a contribution!");
-      } else if (linkMode === 'member') {
-        // Debit attributed as a DEDUCTION from a member
-        if (!selectedMemberId) return;
-        const actualAmount = -Math.abs(amountFloat); // negative to signal deduction
-        await updateTransaction(userProfile.householdId, tx.id, {
-           memberId: selectedMemberId, billId: null,
-           status: 'contribution', actualAmount, varianceReason: 'Deduction'
-        });
-        addToast("Transaction recorded as a member deduction!");
-      } else {
-        // Debit linked to a Bill
-        if (!selectedBillId) return;
-        const bill = allBills.find(b => b.id === selectedBillId);
-        const actualAmount = Math.abs(amountFloat);
-        const isVariance = actualAmount > bill.expectedAmount;
-        await updateTransaction(userProfile.householdId, tx.id, {
-           billId: selectedBillId, memberId: null,
-           status: 'cleared', actualAmount,
-           varianceReason: isVariance ? 'Manual Link Variance' : ''
-        });
-        addToast("Transaction linked to bill!");
-      }
+      await executeSaveLink(tx.id, saveData);
+      addToast(`Linked!`);
       setLinkModalTx(null);
-      setSelectedBillId('');
-      setSelectedMemberId('');
-      setLinkMode('bill');
       fetchData();
-    } catch (err) {
-      addToast("Error linking transaction.", "error");
+    } catch {
+      addToast('Error linking transaction.', 'error');
     }
-  };
+  }
 
-  const handleSweepStart = () => {
+  // sweep only covers fully-unlinked (not partially-settled ones which the user handles manually)
+  function handleSweepStart() {
     const proposals = [];
-    // Only sweep transactions that are completely unclassified (no billId and not already a contribution)
-    const currentUnmatched = transactions.filter(t => t.billId === null && t.status !== 'contribution');
-    let workingUnpaid = [...unpaidBills];
-    
+    const currentUnmatched = transactions.filter(t => !isContributionTx(t) && !hasAnyBillLink(t));
+    const usedBillIds = new Set();
+
     currentUnmatched.forEach(tx => {
-       const amountFloat = parseAmount(tx.amount);
-       const searchSpace = `${tx.name || ''} ${tx.rawBankDescription || ''}`.toLowerCase();
+      const amountFloat = parseAmount(tx.amount);
+      const searchSpace = `${tx.name || ''} ${tx.rawBankDescription || ''}`.toLowerCase();
 
-       // Positive transactions → try to match against Members (income/contributions)
-       if (amountFloat > 0 && members.length > 0) {
-          const matchedMember = members.find(m => {
-             const baseNameMatch = m.name && searchSpace.includes(m.name.toLowerCase());
-             const kwMatch = m.matchKeywords && Array.isArray(m.matchKeywords) && m.matchKeywords.length > 0
-                ? m.matchKeywords.some(kw => searchSpace.includes(kw.trim().toLowerCase()))
-                : false;
-             return baseNameMatch || kwMatch;
-          });
-          if (matchedMember) {
-             const actualAmount = Math.abs(amountFloat);
-             proposals.push({
-                id: tx.id,
-                txName: tx.name,
-                txAmount: tx.amount,
-                txDate: tx.dateStr || `${tx.month}/${tx.year}`,
-                billName: `Contribution → ${matchedMember.name}`,
-                isContribution: true,
-                updates: {
-                   memberId: matchedMember.id,
-                   billId: null,
-                   status: 'contribution',
-                   actualAmount: actualAmount,
-                   varianceReason: ''
-                }
-             });
-          }
-          return; // Don't try to match income against bills
-       }
-
-       // Negative transactions → first check members (possible deduction), then bills
-       const matchedMemberForDeduction = members.find(m => {
-          const baseNameMatch = m.name && searchSpace.includes(m.name.toLowerCase());
-          const kwMatch = m.matchKeywords && Array.isArray(m.matchKeywords) && m.matchKeywords.length > 0
-             ? m.matchKeywords.some(kw => searchSpace.includes(kw.trim().toLowerCase()))
-             : false;
-          return baseNameMatch || kwMatch;
-       });
-
-       const matchedProvider = providers.find(p => {
-          if (!tx.name) return false;
-          const baseNameMatch = p.name && searchSpace.includes(p.name.toLowerCase());
-          const kwMatch = p.matchKeywords && Array.isArray(p.matchKeywords) && p.matchKeywords.length > 0
-              ? p.matchKeywords.some(kw => searchSpace.includes(kw.trim().toLowerCase()))
-              : false;
-          return baseNameMatch || kwMatch;
-       });
-
-       // If it matches a member but not a provider → propose as deduction
-       if (matchedMemberForDeduction && !matchedProvider) {
-          const actualAmount = -Math.abs(amountFloat); // negative = deduction
-          proposals.push({
-             id: tx.id,
-             txName: tx.name,
-             txAmount: tx.amount,
-             txDate: tx.dateStr || `${tx.month}/${tx.year}`,
-             billName: `Deduction from ${matchedMemberForDeduction.name}`,
-             isContribution: true,
-             updates: {
-                memberId: matchedMemberForDeduction.id,
-                billId: null,
-                status: 'contribution',
-                actualAmount,
-                varianceReason: 'Deduction'
-             }
-          });
-          return;
-       }
-       
-       if (matchedProvider) {
-          const txD = tx.dateStr ? new Date(tx.dateStr) : new Date(tx.date);
-          const txMonth = !isNaN(txD.getTime()) ? txD.getMonth() + 1 : tx.month;
-          const txYear = !isNaN(txD.getTime()) ? txD.getFullYear() : tx.year;
-          
-          const targetBillIdx = workingUnpaid.findIndex(b => b.providerId === matchedProvider.id && b.month === txMonth && b.year === txYear);
-          if (targetBillIdx !== -1) {
-             const targetBill = workingUnpaid[targetBillIdx];
-             const actualAmount = Math.abs(parseAmount(tx.amount));
-             const isVariance = actualAmount > targetBill.expectedAmount;
-             
-             proposals.push({
-                id: tx.id,
-                txName: tx.name,
-                txAmount: tx.amount,
-                txDate: tx.dateStr || `${tx.month}/${tx.year}`,
-                billName: `${matchedProvider.name} [${targetBill.year}-${String(targetBill.month).padStart(2,'0')}]`,
-                isContribution: false,
-                updates: {
-                   billId: targetBill.id,
-                   status: 'cleared',
-                   actualAmount: actualAmount,
-                   varianceReason: isVariance ? 'Auto-Sweep Variance' : ''
-                }
-             });
-             workingUnpaid.splice(targetBillIdx, 1);
-          }
-       }
-    });
-    
-    if (proposals.length > 0) {
-       setPendingProposals(proposals);
-    } else {
-       addToast("No new matches found among historic transactions.", "info");
-    }
-  };
-
-  const handleApproveSweep = async (approvedMatches) => {
-    try {
-      setPendingProposals(null);
-      setLoading(true);
-      const payload = approvedMatches.map(m => ({ id: m.id, updates: m.updates }));
-      await updateBulkTransactions(userProfile.householdId, payload);
-      addToast(`Successfully swept ${payload.length} historic transactions!`, 'success');
-      fetchData();
-    } catch (e) {
-      addToast("Failed to save approved sweep matches.", "error");
-      setLoading(false);
-    }
-  };
-
-  const handleDelete = async (txId) => {
-    if (window.confirm("Permanently delete this transaction?")) {
-      try {
-        await deleteTransaction(userProfile.householdId, txId);
-        addToast("Transaction deleted.");
-        fetchData();
-      } catch (err) {
-        addToast("Error deleting transaction.", "error");
+      if (amountFloat > 0) {
+        const m = members.find(m => {
+          const nm = m.name && searchSpace.includes(m.name.toLowerCase());
+          const kw = Array.isArray(m.matchKeywords) ? m.matchKeywords.some(k => searchSpace.includes(k.trim().toLowerCase())) : false;
+          return nm || kw;
+        });
+        if (m) proposals.push({
+          id: tx.id, txName: tx.name, txAmount: tx.amount,
+          txDate: tx.dateStr || `${tx.month}/${tx.year}`,
+          billName: `Contribution → ${m.name}`,
+          updates: { memberId: m.id, billId: null, billIds: [], status: 'contribution', actualAmount: Math.abs(amountFloat) },
+        });
+        return;
       }
+
+      // Negative → member deduction first
+      const dm = members.find(m => {
+        const nm = m.name && searchSpace.includes(m.name.toLowerCase());
+        const kw = Array.isArray(m.matchKeywords) ? m.matchKeywords.some(k => searchSpace.includes(k.trim().toLowerCase())) : false;
+        return nm || kw;
+      });
+      const p = providers.find(p => {
+        const nm = p.name && searchSpace.includes(p.name.toLowerCase());
+        const kw = Array.isArray(p.matchKeywords) ? p.matchKeywords.some(k => searchSpace.includes(k.trim().toLowerCase())) : false;
+        return nm || kw;
+      });
+
+      if (dm && !p) {
+        proposals.push({
+          id: tx.id, txName: tx.name, txAmount: tx.amount,
+          txDate: tx.dateStr || `${tx.month}/${tx.year}`,
+          billName: `Deduction from ${dm.name}`,
+          updates: { memberId: dm.id, billId: null, billIds: [], status: 'contribution', actualAmount: -Math.abs(amountFloat), varianceReason: 'Deduction' },
+        });
+        return;
+      }
+
+      if (p) {
+        const txDate = new Date(tx.dateStr || `${tx.year}-${tx.month}-01`);
+        const candidateBills = allBills
+          .filter(b => b.providerId === p.id && b.status !== 'cleared' && !usedBillIds.has(b.id))
+          .map(b => ({ ...b, _score: scoreBillForTx(b, txDate) }))
+          .filter(b => b._score > 0)
+          .sort((a, b) => b._score - a._score);
+
+        if (candidateBills.length > 0) {
+          const best = candidateBills[0];
+          usedBillIds.add(best.id);
+          proposals.push({
+            id: tx.id, txName: tx.name, txAmount: tx.amount,
+            txDate: tx.dateStr || `${tx.month}/${tx.year}`,
+            billName: `${p.name} — ${getBillPeriodLabel(best)}`,
+            updates: { billId: best.id, billIds: [best.id], status: 'cleared', actualAmount: Math.abs(amountFloat) },
+          });
+        }
+      }
+    });
+
+    if (proposals.length > 0) {
+      setSweepQueue(proposals);
+      setSweepStep(0);
+    } else {
+      addToast('No matches found.', 'info');
     }
-  };
+  }
+
+  async function handleSweepApprove(saveData) {
+    const proposal = sweepQueue[sweepStep];
+    if (!proposal) return;
+    try {
+      await executeSaveLink(proposal.id, saveData);
+      // Advance step; if done, refresh
+      const nextStep = sweepStep + 1;
+      if (nextStep >= sweepQueue.length) {
+        setSweepQueue([]);
+        setSweepStep(0);
+        addToast(`Sweep complete! Processed ${sweepQueue.length} transaction(s).`, 'success');
+        fetchData();
+      } else {
+        setSweepStep(nextStep);
+        // Refresh data in background so scores stay accurate
+        fetchData();
+      }
+    } catch {
+      addToast('Error saving match.', 'error');
+    }
+  }
+
+  function handleSweepSkip() {
+    const nextStep = sweepStep + 1;
+    if (nextStep >= sweepQueue.length) {
+      setSweepQueue([]);
+      setSweepStep(0);
+      addToast('Sweep complete.', 'success');
+      fetchData();
+    } else {
+      setSweepStep(nextStep);
+    }
+  }
+
+  function handleSweepClose() {
+    setSweepQueue([]);
+    setSweepStep(0);
+    fetchData();
+  }
+
+  // ── Unlink / Delete ────────────────────────────────────────────────────────
+  async function handleUnlinkOne(tx, billId) {
+    try {
+      await unlinkTransactionFromBill(userProfile.householdId, billId, tx.id);
+      addToast('Bill link removed.');
+      fetchData();
+    } catch {
+      addToast('Error removing link.', 'error');
+    }
+  }
+
+  async function handleUnlinkAll(tx) {
+    if (!window.confirm('Remove all bill/member links from this transaction?')) return;
+    try {
+      const billIds = tx.billIds?.length > 0 ? tx.billIds : (tx.billId ? [tx.billId] : []);
+      for (const bid of billIds) {
+        await unlinkTransactionFromBill(userProfile.householdId, bid, tx.id);
+      }
+      if (tx.status === 'contribution' && billIds.length === 0) {
+        await updateTransaction(userProfile.householdId, tx.id, {
+          memberId: null, billId: null, billIds: [], status: 'pending_classification', varianceReason: '',
+        });
+      }
+      addToast('All links removed.');
+      fetchData();
+    } catch {
+      addToast('Error unlinking transaction.', 'error');
+    }
+  }
+
+  async function handleDelete(txId) {
+    if (!window.confirm('Permanently delete this transaction?')) return;
+    try {
+      await deleteTransaction(userProfile.householdId, txId);
+      addToast('Deleted.');
+      fetchData();
+    } catch {
+      addToast('Error deleting.', 'error');
+    }
+  }
 
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] text-gray-500">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
-        <p className="font-medium animate-pulse">Loading transaction graph...</p>
+      <div className="flex flex-col items-center justify-center min-h-[60vh] text-gray-400">
+        <div className="w-12 h-12 border-4 border-blue-100 border-t-blue-500 rounded-full animate-spin mb-4" />
+        <p className="font-semibold text-gray-500">Loading transaction ledger…</p>
       </div>
     );
   }
 
-  // Contributions now show inside Matched with a green label
-  const matched = transactions.filter(t => t.billId !== null || t.status === 'contribution');
-  const unmatched = transactions.filter(t => t.billId === null && t.status !== 'contribution');
-  const viewingList = tab === 'matched' ? matched : unmatched;
-
-  const LinkModal = () => {
-    if (!linkModalTx) return null;
-    const amountFloat = parseAmount(linkModalTx.amount);
-    const isIncome = amountFloat > 0;
-    // For debits: user can toggle between linking a bill OR deducting from a member
-    const canSave = isIncome
-       ? !!selectedMemberId
-       : linkMode === 'member' ? !!selectedMemberId : !!selectedBillId;
-    const closeFn = () => { setLinkModalTx(null); setSelectedBillId(''); setSelectedMemberId(''); setLinkMode('bill'); };
-    return (
-      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
-            <div>
-              <h2 className="text-lg font-bold text-gray-900">Link Transaction</h2>
-              <p className="text-sm text-gray-500 mt-0.5 truncate max-w-[320px]">{linkModalTx.name} · <span className={isIncome ? 'text-green-600 font-bold' : 'text-red-500 font-bold'}>{linkModalTx.amount}</span></p>
-            </div>
-            <button onClick={closeFn} className="text-gray-400 hover:text-gray-600">
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-            </button>
-          </div>
-          <div className="p-6 space-y-4">
-            {isIncome ? (
-              <>
-                <div className="flex items-center space-x-2 mb-2">
-                  <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-green-100 text-green-600">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" /></svg>
-                  </span>
-                  <p className="text-sm font-semibold text-gray-700">Positive amount — attribute as a contribution</p>
-                </div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Select Contributor</label>
-                <select value={selectedMemberId} onChange={e => setSelectedMemberId(e.target.value)} className="w-full p-2.5 border border-gray-300 rounded-lg text-sm focus:ring-blue-500 focus:border-blue-500">
-                  <option value="">-- Select a Member --</option>
-                  {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                </select>
-              </>
-            ) : (
-              <>
-                {/* Mode toggle for debit */}
-                <div className="flex bg-gray-100 rounded-lg p-1 mb-2">
-                  <button onClick={() => { setLinkMode('bill'); setSelectedMemberId(''); }} className={`flex-1 py-1.5 text-sm font-semibold rounded-md transition-all ${linkMode === 'bill' ? 'bg-white shadow-sm text-blue-700' : 'text-gray-500'}`}>Link to Bill</button>
-                  <button onClick={() => { setLinkMode('member'); setSelectedBillId(''); }} className={`flex-1 py-1.5 text-sm font-semibold rounded-md transition-all ${linkMode === 'member' ? 'bg-white shadow-sm text-red-600' : 'text-gray-500'}`}>Deduct from Member</button>
-                </div>
-                {linkMode === 'bill' ? (
-                  <>
-                    <div className="flex items-center space-x-2 mb-1">
-                      <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-blue-100 text-blue-600">
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6M5 21h14a2 2 0 002-2V7l-5-5H5a2 2 0 00-2 2v14a2 2 0 002 2z" /></svg>
-                      </span>
-                      <p className="text-sm font-semibold text-gray-700">Debit — link to an outstanding bill</p>
-                    </div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-1">Select Bill</label>
-                    <select value={selectedBillId} onChange={e => setSelectedBillId(e.target.value)} className="w-full p-2.5 border border-gray-300 rounded-lg text-sm">
-                      <option value="">-- Select a Bill --</option>
-                      {providers.map(p => {
-                        const pBills = unpaidBills.filter(b => b.providerId === p.id);
-                        if (pBills.length === 0) return null;
-                        return (
-                          <optgroup key={p.id} label={p.name}>
-                            {pBills.map(b => <option key={b.id} value={b.id}>[{b.year}-{String(b.month).padStart(2,'0')}] Due: €{b.expectedAmount.toFixed(2)}</option>)}
-                          </optgroup>
-                        );
-                      })}
-                    </select>
-                  </>
-                ) : (
-                  <>
-                    <div className="flex items-center space-x-2 mb-1">
-                      <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-red-100 text-red-500">
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M20 12H4" /></svg>
-                      </span>
-                      <p className="text-sm font-semibold text-gray-700">Debit — deduct from a member's balance</p>
-                    </div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-1">Select Member</label>
-                    <select value={selectedMemberId} onChange={e => setSelectedMemberId(e.target.value)} className="w-full p-2.5 border border-gray-300 rounded-lg text-sm">
-                      <option value="">-- Select a Member --</option>
-                      {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                    </select>
-                  </>
-                )}
-              </>
-            )}
-          </div>
-          <div className="px-6 pb-6 flex justify-end space-x-3">
-            <button onClick={closeFn} className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
-            <button disabled={!canSave} onClick={handleManualLink} className="px-5 py-2 text-sm font-bold text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-40 transition">Save Link</button>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-
   return (
     <div className="p-4 md:p-8 max-w-5xl mx-auto space-y-6">
-      {pendingProposals && (
-         <SweepReviewModal 
-           pendingProposals={pendingProposals}
-           onClose={() => setPendingProposals(null)}
-           onApprove={handleApproveSweep}
-         />
-      )}
-      {/* Smart Link Popup Modal */}
-      <LinkModal />
 
-      <header className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between space-y-4 md:space-y-0">
+      {/* Step-by-step sweep modal */}
+      {sweeping && (
+        <SweepStepModal
+          proposal={sweepQueue[sweepStep]}
+          stepNum={sweepStep + 1}
+          totalSteps={sweepQueue.length}
+          allBills={allBills}
+          providers={providers}
+          members={members}
+          onApprove={handleSweepApprove}
+          onSkip={handleSweepSkip}
+          onClose={handleSweepClose}
+        />
+      )}
+
+      {/* Manual link modal */}
+      {linkModalTx && (
+        <LinkModal
+          tx={linkModalTx}
+          allBills={allBills}
+          providers={providers}
+          members={members}
+          onSave={handleSaveLink}
+          onClose={() => setLinkModalTx(null)}
+          getAllocated={getAllocated}
+        />
+      )}
+
+      {/* Header */}
+      <header className="mb-2 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Transaction Ledger</h1>
-          <p className="text-gray-500 text-sm">Manage, filter, and reconcile your global imported history.</p>
+          <h1 className="text-3xl font-black text-gray-900 tracking-tight">Transaction Ledger</h1>
+          <p className="text-gray-400 text-sm mt-0.5">Review, match, and reconcile all imported transactions</p>
         </div>
-        <div className="flex bg-gray-100 p-1 rounded-lg items-center">
-           {tab === 'unmatched' && unmatched.length > 0 && (
-             <Button onClick={handleSweepStart} variant="primary" className="mr-3 py-1.5 px-3 text-sm flex items-center shadow-sm">
-                <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" /></svg>
-                Auto-Sweep
-             </Button>
-           )}
-           <button onClick={() => setTab('unmatched')} className={`px-4 py-2 rounded-md font-medium text-sm transition-colors ${tab === 'unmatched' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}>Unmatched ({unmatched.length})</button>
-           <button onClick={() => setTab('matched')} className={`px-4 py-2 rounded-md font-medium text-sm transition-colors ${tab === 'matched' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}>Matched ({matched.length})</button>
+        <div className="flex items-center bg-gray-100 border border-gray-200 p-1 rounded-xl gap-1">
+          {tab === 'unmatched' && unmatched.length > 0 && (
+            <Button onClick={handleSweepStart} variant="primary" className="mr-1 py-1.5 px-3 text-sm flex items-center gap-1.5 shadow-sm">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+              Auto-Sweep
+            </Button>
+          )}
+          <button onClick={() => setTab('unmatched')}
+            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${tab === 'unmatched' ? 'bg-white shadow text-blue-700' : 'text-gray-500 hover:text-gray-700'}`}>
+            Unmatched ({unmatched.filter(t => !hasAnyBillLink(t)).length})
+            {unmatched.filter(t => isPartiallySettled(t)).length > 0 && (
+              <span className="ml-1.5 text-[10px] font-black text-amber-600 bg-amber-100 px-1.5 py-0.5 rounded-full">
+                {unmatched.filter(t => isPartiallySettled(t)).length} partial
+              </span>
+            )}
+          </button>
+          <button onClick={() => setTab('matched')}
+            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${tab === 'matched' ? 'bg-white shadow text-blue-700' : 'text-gray-500 hover:text-gray-700'}`}>
+            Matched ({matched.length})
+          </button>
         </div>
       </header>
 
-      <Card className="p-0 border-gray-200 shadow-sm overflow-hidden min-h-[500px]">
-         <div className="divide-y divide-gray-100">
-            {viewingList.length === 0 ? (
-               <div className="p-16 text-center text-gray-500">
-                  <svg className="w-12 h-12 text-gray-300 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                  No transactions found in this category.
-               </div>
-            ) : viewingList.map(tx => (
-               <div key={tx.id} className="p-5 flex flex-col md:flex-row md:items-center justify-between hover:bg-gray-50/80 transition-colors group">
-                  <div className="flex flex-col mb-4 md:mb-0">
-                     <p className="font-semibold text-gray-900 text-lg flex items-center">
-                        {tx.name}
-                        {/* Bill match label */}
-                        {tab === 'matched' && tx.status !== 'contribution' && (() => {
-                           const b = allBills.find(b => b.id === tx.billId);
-                           const p = b ? providers.find(p => p.id === b.providerId) : null;
-                           return p ? (
-                             <span className="ml-3 text-xs font-bold px-2 py-0.5 rounded border bg-blue-50 border-blue-100 text-blue-700">
-                               Linked to: {p.name} [{b.year}-{String(b.month).padStart(2,'0')}]
-                             </span>
-                           ) : null;
-                        })()}
-                        {/* Contribution label — green for deposit, red for deduction */}
-                        {tab === 'matched' && tx.status === 'contribution' && (() => {
-                           const m = members.find(m => m.id === tx.memberId);
-                           const isDeduction = (tx.actualAmount || 0) < 0;
-                           return (
-                             <span className={`ml-3 text-xs font-bold px-2 py-0.5 rounded border ${isDeduction ? 'bg-red-50 border-red-200 text-red-600' : 'bg-green-50 border-green-200 text-green-700'}`}>
-                               {isDeduction ? 'Deduction from' : 'Contribution by'} {m?.name || 'Member'}
-                             </span>
-                           );
-                        })()}
-                     </p>
-                     <p className="text-sm text-gray-500 font-medium tracking-wide mt-1 uppercase">Date: {tx.dateStr || `${tx.month}/${tx.year}`} <span className="mx-2">•</span> <span className="text-gray-800 font-bold bg-gray-100 px-2 py-0.5 rounded">{tx.amount}</span></p>
-                     {tx.rawBankDescription && (
-                        <p className="text-sm text-gray-400 mt-1.5 italic max-w-2xl break-words line-clamp-2">
-                           "{tx.rawBankDescription}"
-                        </p>
-                     )}
+      {/* Search bar — between header and table */}
+      <div className="flex items-center gap-3">
+        <div className="relative flex-1">
+          <svg className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M17 11A6 6 0 115 11a6 6 0 0112 0z" /></svg>
+          <input
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Filter by name or bank description…"
+            className="w-full pl-10 pr-9 py-2.5 text-sm border border-gray-200 rounded-xl bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"
+          />
+          {search && (
+            <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+          )}
+        </div>
+        {q && (
+          <span className="text-xs text-gray-400 shrink-0 whitespace-nowrap">
+            {viewList.length === 0 ? 'No results' : `${viewList.length} result${viewList.length !== 1 ? 's' : ''}`}
+          </span>
+        )}
+      </div>
+
+      <Card className="p-0 border-gray-200 overflow-hidden min-h-[400px]">
+        <div className="divide-y divide-gray-100">
+          {viewList.length === 0 ? (
+            <div className="py-20 text-center">
+              <svg className="w-12 h-12 text-gray-200 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <p className="text-gray-400 font-medium">No transactions here.</p>
+            </div>
+          ) : viewList.map(tx => {
+            const amtF      = parseAmount(tx.amount);
+            const txAmt     = Math.abs(amtF);
+            const isContrib = isContributionTx(tx);
+            const isDeduct  = isContrib && (tx.actualAmount || 0) < 0;
+            const partial   = isPartiallySettled(tx);
+            const allocated = getAllocated(tx);
+            const allocPct  = txAmt > 0 ? Math.min(100, (allocated / txAmt) * 100) : 0;
+
+            const linkedBillIds = tx.billIds?.length > 0 ? tx.billIds : (tx.billId ? [tx.billId] : []);
+            const linkedBills   = linkedBillIds.map(id => allBills.find(b => b.id === id)).filter(Boolean);
+            const member        = members.find(m => m.id === tx.memberId);
+
+            return (
+              <div key={tx.id} className={`p-5 flex flex-col md:flex-row md:items-start justify-between transition-colors gap-4 ${
+                partial ? 'hover:bg-amber-50/40 border-l-2 border-amber-400' : 'hover:bg-gray-50/60'
+              }`}>
+                <div className="flex-1 min-w-0">
+                  <div className="flex flex-wrap items-center gap-2 mb-1">
+                    <p className="font-bold text-gray-900 text-base truncate">{tx.name}</p>
+
+                    {/* Partial settlement badge (Unmatched tab) */}
+                    {partial && (
+                      <span className="inline-flex items-center gap-1.5 text-[11px] font-black px-2.5 py-0.5 rounded-full bg-amber-100 border border-amber-200 text-amber-700">
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 8v4l3 3" /><circle cx="12" cy="12" r="9" strokeWidth={2} /></svg>
+                        Partial · € {allocated.toFixed(2)} of € {txAmt.toFixed(2)} allocated
+                      </span>
+                    )}
+
+                    {/* Bill link badges — with per-bill unlink × */}
+                    {linkedBills.map(bill => {
+                      const prov = providers.find(p => p.id === bill.providerId);
+                      const billAlloc = tx.billAmounts?.[bill.id];
+                      return (
+                        <span key={bill.id} className="group inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded bg-blue-50 border border-blue-100 text-blue-700">
+                          {prov?.name || '—'} · {getBillPeriodLabel(bill)}
+                          {billAlloc !== undefined && (
+                            <span className="ml-1 text-blue-400 font-normal">€{Number(billAlloc).toFixed(2)}</span>
+                          )}
+                          {/* × unlink this specific bill */}
+                          <button
+                            onClick={e => { e.stopPropagation(); handleUnlinkOne(tx, bill.id); }}
+                            title="Remove this bill link"
+                            className="ml-0.5 text-blue-300 hover:text-red-500 transition opacity-0 group-hover:opacity-100"
+                          >
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg>
+                          </button>
+                        </span>
+                      );
+                    })}
+
+                    {/* Contribution/deduction badge */}
+                    {isContrib && (
+                      <span className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded border ${
+                        isDeduct ? 'bg-red-50 border-red-200 text-red-600' : 'bg-green-50 border-green-200 text-green-700'
+                      }`}>
+                        {isDeduct ? '↓ Deduction from' : '↑ Contribution by'} {member?.name || 'Member'}
+                      </span>
+                    )}
                   </div>
-                  
-                  <div className="flex items-center space-x-3">
-                      {tab === 'unmatched' && (
-                         <Button variant="outline" onClick={() => { setLinkModalTx(tx); setSelectedBillId(''); setSelectedMemberId(''); }} className="text-sm py-1.5">Link Template</Button>
-                      )}
-                      {tab === 'matched' && (
-                         <Button variant="outline" onClick={() => handleUnmatch(tx)} className="text-sm py-1.5 text-orange-600 border-orange-200 hover:bg-orange-50">Unlink</Button>
-                      )}
-                      <button onClick={() => handleDelete(tx.id)} className="text-gray-300 hover:text-red-500 transition-colors p-2 rounded-full hover:bg-red-50">
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                      </button>
-                   </div>
-               </div>
-            ))}
-         </div>
+
+                  <p className="text-sm text-gray-400 font-medium mt-0.5">
+                    {tx.dateStr || `${tx.month}/${tx.year}`}
+                    <span className="mx-2 text-gray-200">•</span>
+                    <span className="text-gray-700 font-black bg-gray-100 px-2 py-0.5 rounded">{tx.amount}</span>
+                    {/* Show total paid for matched non-contribution */}
+                    {!isContrib && tab === 'matched' && allocated > 0 && (
+                      <span className="ml-2 text-green-600 font-semibold text-xs">✓ € {allocated.toFixed(2)} settled</span>
+                    )}
+                  </p>
+
+                  {/* Allocation progress bar (partial only) */}
+                  {partial && (
+                    <div className="mt-2 flex items-center gap-2">
+                      <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                        <div className="h-full bg-amber-400 rounded-full transition-all" style={{ width: `${allocPct}%` }} />
+                      </div>
+                      <span className="text-[10px] font-bold text-amber-600 shrink-0">{allocPct.toFixed(0)}%</span>
+                    </div>
+                  )}
+
+                  {tx.rawBankDescription && (
+                    <p className="text-xs text-gray-400 mt-1.5 italic line-clamp-2">"{tx.rawBankDescription}"</p>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  {/* Unmatched: Link button (also shown for partial so user can add more links) */}
+                  {tab === 'unmatched' && (
+                    <button onClick={() => setLinkModalTx(tx)}
+                      className={`flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-xl transition border ${
+                        partial
+                          ? 'text-amber-700 border-amber-200 bg-amber-50 hover:bg-amber-100'
+                          : 'text-blue-700 border-blue-200 bg-blue-50 hover:bg-blue-100'
+                      }`}>
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
+                      {partial ? 'Add More' : 'Link'}
+                    </button>
+                  )}
+                  {/* Matched: Unlink all */}
+                  {tab === 'matched' && (
+                    <button onClick={() => handleUnlinkAll(tx)}
+                      className="px-3 py-2 text-xs font-bold text-orange-600 border border-orange-200 rounded-xl hover:bg-orange-50 transition">
+                      Unlink All
+                    </button>
+                  )}
+                  <button onClick={() => handleDelete(tx.id)}
+                    className="p-2 rounded-xl text-gray-300 hover:text-red-500 hover:bg-red-50 transition">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </Card>
     </div>
   );

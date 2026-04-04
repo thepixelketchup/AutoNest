@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
-import { getProviders, getMembers, getGeneratedBills, generateDueBills, getTransactions } from '../services/billService';
+import { getProviders, getMembers, getBills, getTransactions, getBillPeriodMonthYear } from '../services/billService';
 import { useToast } from '../hooks/useToast';
 
 export default function MatchReport() {
@@ -24,10 +24,9 @@ export default function MatchReport() {
    async function fetchReportData() {
       try {
          setLoading(true);
-         await generateDueBills(userProfile.householdId);
          const [fetchedProviders, fetchedBills, fetchedTxs, fetchedMembers] = await Promise.all([
             getProviders(userProfile.householdId),
-            getGeneratedBills(userProfile.householdId),
+            getBills(userProfile.householdId),
             getTransactions(userProfile.householdId),
             getMembers(userProfile.householdId)
          ]);
@@ -36,132 +35,111 @@ export default function MatchReport() {
          const currentYear = now.getFullYear();
          const currentMonth = now.getMonth() + 1;
 
-         // 1. Gather all unique YYYY-MM keys from generated bills natively
-         // AND explicitly shred any future ghost bills from the array 
-         const validBills = fetchedBills.filter(b => b.month && b.year && Object.assign({}, b)).filter(b => {
-             return b.year < currentYear || (b.year === currentYear && b.month <= currentMonth);
+         // Normalize bills — attach period info and filter to past/current only
+         const validBills = fetchedBills.map(bill => {
+            const { month, year } = getBillPeriodMonthYear(bill);
+            return { ...bill, _month: month, _year: year };
+         }).filter(b => {
+            return b._year < currentYear || (b._year === currentYear && b._month <= currentMonth);
          });
 
          const monthKeysSet = new Set(
-            validBills.map(b => `${b.year}-${String(b.month).padStart(2, '0')}`)
+            validBills.filter(b => b._month && b._year).map(b => `${b._year}-${String(b._month).padStart(2, '0')}`)
          );
-
-         // 2. We always want the current month shown
          const currentMonthKey = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
          monthKeysSet.add(currentMonthKey);
 
-         // Compute all active years for Dropdown
-         const allYears = new Set(validBills.map(b => b.year));
-         allYears.add(currentYear); // Failsafe inclusion
+         const allYears = new Set(validBills.map(b => b._year).filter(Boolean));
+         allYears.add(currentYear);
          const sortedYears = [...allYears].sort((a,b) => b - a);
          setAvailableYears(sortedYears);
+         if (!sortedYears.includes(selectedYear)) setSelectedYear(sortedYears[0]);
 
-         if (!sortedYears.includes(selectedYear)) {
-            setSelectedYear(sortedYears[0]);
-         }
+         const monthKeys = [...monthKeysSet].sort((a, b) => b.localeCompare(a));
 
-         const monthKeys = [...monthKeysSet];
-         monthKeys.sort((a, b) => b.localeCompare(a)); // Descending sort
-
-         // 3. Populate report object per month
+         // ── Month Reports ──────────────────────────────────────────────────────
          const generatedReports = monthKeys.map(key => {
             const [yearStr, monthStr] = key.split('-');
-            const year = parseInt(yearStr, 10);
+            const year  = parseInt(yearStr, 10);
             const month = parseInt(monthStr, 10);
 
-            // Find all generated valid bills for this explicit ledger month
-            const billsForMonth = validBills.filter(b => b.year === year && b.month === month);
+            const billsForMonth = validBills.filter(b => b._year === year && b._month === month);
 
             const ledger = billsForMonth.map(bill => {
                const provider = fetchedProviders.find(p => p.id === bill.providerId);
-               
-               // Relevant transactions explicitly point to this generated bill instance's ID!
-               const relevantTxs = fetchedTxs.filter(t => t.billId === bill.id && t.status === 'cleared');
+               // Many-to-many: find txs linked via billIds or legacy billId
+               const relevantTxs = fetchedTxs.filter(t => {
+                  if (t.status !== 'cleared') return false;
+                  return (t.billIds && t.billIds.includes(bill.id)) || t.billId === bill.id;
+               });
                const sumPaid = relevantTxs.reduce((acc, t) => acc + (t.actualAmount || 0), 0);
+               const billAmt = bill.amount || 0;
 
                let status = 'Pending';
                if (sumPaid > 0) {
-                  if (sumPaid >= bill.expectedAmount * 0.95) status = 'Paid'; 
+                  if (sumPaid >= billAmt * 0.95) status = 'Paid';
                   else status = 'Partial';
-               } else {
-                  const currentM = now.getMonth() + 1;
-                  const currentY = now.getFullYear();
-                  if (year < currentY || (year === currentY && month < currentM)) {
-                     status = 'Missed';
-                  }
+               } else if (year < currentYear || (year === currentYear && month < currentMonth)) {
+                  status = 'Missed';
                }
 
-               return { 
-                  ...bill, 
-                  tx: relevantTxs.length > 0 ? relevantTxs[0] : null, 
-                  actualPaid: sumPaid, 
+               return {
+                  ...bill,
+                  tx: relevantTxs.length > 0 ? relevantTxs[0] : null,
+                  actualPaid: sumPaid,
                   reportStatus: status,
-                  name: provider?.name || 'Unknown Blueprint',
+                  name: provider?.name || 'Unknown',
                   category: provider?.category || 'Uncategorized',
-                  paymentMethod: provider?.paymentMethod || 'Direct Debit'
+                  paymentMethod: provider?.paymentMethod || 'Direct Debit',
+                  expectedAmount: billAmt, // keep compat with rendering below
                };
             });
 
-            const expectedSum = ledger.reduce((acc, b) => acc + b.expectedAmount, 0);
-            const paidSum = ledger.reduce((acc, b) => acc + b.actualPaid, 0);
+            const expectedSum = ledger.reduce((acc, b) => acc + (b.amount || 0), 0);
+            const paidSum     = ledger.reduce((acc, b) => acc + b.actualPaid, 0);
             const missedCount = ledger.filter(b => b.reportStatus === 'Missed').length;
 
-            return {
-               key, year, month,
-               label: new Date(year, month - 1).toLocaleString('default', { month: 'long', year: 'numeric' }),
-               expectedSum,
-               paidSum,
-               missedCount,
-               ledger
-            };
+            return { key, year, month, label: new Date(year, month - 1).toLocaleString('default', { month: 'long', year: 'numeric' }), expectedSum, paidSum, missedCount, ledger };
          });
 
-         // 4. Populate report object per provider
+         // ── Provider Reports ───────────────────────────────────────────────────
          const generatedProviderReports = fetchedProviders.map(provider => {
             const providerBills = validBills.filter(b => b.providerId === provider.id);
-            providerBills.sort((a,b) => b.year !== a.year ? b.year - a.year : b.month - a.month);
-            
+            providerBills.sort((a,b) => b._year !== a._year ? b._year - a._year : b._month - a._month);
+
             const ledger = providerBills.map(bill => {
-               const relevantTxs = fetchedTxs.filter(t => t.billId === bill.id && t.status === 'cleared');
+               const relevantTxs = fetchedTxs.filter(t => {
+                  if (t.status !== 'cleared') return false;
+                  return (t.billIds && t.billIds.includes(bill.id)) || t.billId === bill.id;
+               });
                const sumPaid = relevantTxs.reduce((acc, t) => acc + (t.actualAmount || 0), 0);
+               const billAmt = bill.amount || 0;
 
                let status = 'Pending';
                if (sumPaid > 0) {
-                  if (sumPaid >= bill.expectedAmount * 0.95) status = 'Paid'; 
+                  if (sumPaid >= billAmt * 0.95) status = 'Paid';
                   else status = 'Partial';
-               } else {
-                  const currentM = now.getMonth() + 1;
-                  const currentY = now.getFullYear();
-                  if (bill.year < currentY || (bill.year === currentY && bill.month < currentM)) {
-                     status = 'Missed';
-                  }
+               } else if (bill._year < currentYear || (bill._year === currentYear && bill._month < currentMonth)) {
+                  status = 'Missed';
                }
 
-               return { 
-                  ...bill, 
-                  tx: relevantTxs.length > 0 ? relevantTxs[0] : null, 
-                  actualPaid: sumPaid, 
+               return {
+                  ...bill,
+                  tx: relevantTxs.length > 0 ? relevantTxs[0] : null,
+                  actualPaid: sumPaid,
                   reportStatus: status,
-                  label: new Date(bill.year, bill.month - 1).toLocaleString('default', { month: 'long', year: 'numeric' })
+                  expectedAmount: billAmt, // compat
+                  label: new Date(bill._year, bill._month - 1).toLocaleString('default', { month: 'long', year: 'numeric' })
                };
             });
 
-            const expectedSum = ledger.reduce((acc, b) => acc + b.expectedAmount, 0);
-            const paidSum = ledger.reduce((acc, b) => acc + b.actualPaid, 0);
+            const expectedSum = ledger.reduce((acc, b) => acc + (b.amount || 0), 0);
+            const paidSum     = ledger.reduce((acc, b) => acc + b.actualPaid, 0);
             const missedCount = ledger.filter(b => b.reportStatus === 'Missed').length;
 
-            return {
-               id: provider.id,
-               name: provider.name,
-               category: provider.category,
-               paymentMethod: provider.paymentMethod,
-               expectedSum,
-               paidSum,
-               missedCount,
-               ledger
-            };
+            return { id: provider.id, name: provider.name, category: provider.category, paymentMethod: provider.paymentMethod, expectedSum, paidSum, missedCount, ledger };
          });
-         
+
          const filteredProviderReports = generatedProviderReports.filter(pr => pr.ledger.length > 0);
          filteredProviderReports.sort((a,b) => a.name.localeCompare(b.name));
 
