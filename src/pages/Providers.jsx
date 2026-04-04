@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../hooks/useAuth';
-import { getBills, addBill, updateBill } from '../services/billService';
+import { getProviders, addProvider, updateProvider } from '../services/billService';
 import { ProviderModal } from '../components/bills/ProviderModal';
 import { useToast } from '../hooks/useToast';
 import { Card } from '../components/ui/Card';
@@ -25,7 +25,7 @@ export default function Providers() {
   async function loadProviders() {
     try {
       setLoading(true);
-      const data = await getBills(userProfile.householdId);
+      const data = await getProviders(userProfile.householdId);
       // Sort alphabetically
       data.sort((a,b) => a.name.localeCompare(b.name));
       setProviders(data);
@@ -39,10 +39,10 @@ export default function Providers() {
   const handleSave = async (providerData) => {
     try {
       if (editingProvider) {
-        await updateBill(userProfile.householdId, editingProvider.id, providerData);
+        await updateProvider(userProfile.householdId, editingProvider.id, providerData);
         addToast("Provider updated successfully.", "success");
       } else {
-        await addBill(userProfile.householdId, providerData);
+        await addProvider(userProfile.householdId, providerData);
         addToast("New provider saved.", "success");
       }
       setIsModalOpen(false);

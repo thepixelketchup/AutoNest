@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../hooks/useAuth';
-import { getTransactions, getBills, updateTransaction, deleteTransaction, updateBulkTransactions } from '../services/billService';
+import { getTransactions, getProviders, getGeneratedBills, generateDueBills, updateTransaction, deleteTransaction, updateBulkTransactions } from '../services/billService';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { useToast } from '../hooks/useToast';
@@ -11,9 +11,25 @@ export default function Transactions() {
   const { addToast } = useToast();
   
   const [transactions, setTransactions] = useState([]);
-  const [bills, setBills] = useState([]);
+  const [providers, setProviders] = useState([]);
+  const [allBills, setAllBills] = useState([]);
+  const [unpaidBills, setUnpaidBills] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('unmatched'); // 'matched' | 'unmatched'
+
+function parseAmount(amountStr) {
+  if (!amountStr) return 0;
+  let str = amountStr.toString().trim();
+  str = str.replace(/[^0-9.,-]/g, "");
+  const lastComma = str.lastIndexOf(',');
+  const lastDot = str.lastIndexOf('.');
+  if (lastComma > lastDot) {
+     str = str.replace(/\./g, "").replace(/,/g, ".");
+  } else if (lastDot > lastComma) {
+     str = str.replace(/,/g, "");
+  }
+  return parseFloat(str) || 0;
+}
 
   const [linkModeTxId, setLinkModeTxId] = useState(null);
   const [selectedBillId, setSelectedBillId] = useState('');
@@ -27,13 +43,25 @@ export default function Transactions() {
   async function fetchData() {
     try {
       setLoading(true);
-      const [fetchedTransactions, fetchedBills] = await Promise.all([
+      await generateDueBills(userProfile.householdId);
+      const [fetchedTransactions, fetchedProviders, fetchedBills] = await Promise.all([
         getTransactions(userProfile.householdId),
-        getBills(userProfile.householdId)
+        getProviders(userProfile.householdId),
+        getGeneratedBills(userProfile.householdId)
       ]);
       fetchedTransactions.sort((a,b) => new Date(b.dateStr) - new Date(a.dateStr));
+      
+      const unpaid = fetchedBills.filter(bill => {
+        const matchingTxs = fetchedTransactions.filter(t => t.billId === bill.id && t.status === 'cleared');
+        const sumPaid = matchingTxs.reduce((acc, t) => acc + (t.actualAmount || 0), 0);
+        return sumPaid < bill.expectedAmount * 0.95; 
+      });
+      unpaid.sort((a,b) => (a.year !== b.year ? a.year - b.year : a.month - b.month));
+      
       setTransactions(fetchedTransactions);
-      setBills(fetchedBills);
+      setProviders(fetchedProviders);
+      setAllBills(fetchedBills);
+      setUnpaidBills(unpaid);
     } catch (err) {
       addToast("Failed to fetch transactions.", "error");
     } finally {
@@ -60,8 +88,8 @@ export default function Transactions() {
   const handleManualLink = async (tx) => {
     if (!selectedBillId) return;
     try {
-      const bill = bills.find(b => b.id === selectedBillId);
-      const actualAmount = Math.abs(parseFloat(tx.amount.toString().replace(/[^0-9.-]+/g,""))) || 0;
+      const bill = allBills.find(b => b.id === selectedBillId);
+      const actualAmount = Math.abs(parseAmount(tx.amount));
       const isVariance = actualAmount > bill.expectedAmount;
 
       await updateTransaction(userProfile.householdId, tx.id, {
@@ -82,36 +110,46 @@ export default function Transactions() {
   const handleSweepStart = () => {
     const proposals = [];
     const currentUnmatched = transactions.filter(t => t.billId === null);
+    let workingUnpaid = [...unpaidBills];
     
     currentUnmatched.forEach(tx => {
-       const matchedBill = bills.find(b => {
+       const matchedProvider = providers.find(p => {
           if (!tx.name) return false;
-          const importName = tx.name.toLowerCase();
-          if (b.matchKeywords && Array.isArray(b.matchKeywords) && b.matchKeywords.length > 0) {
-             return b.matchKeywords.some(kw => importName.includes(kw.trim().toLowerCase()));
-          } else {
-             return b.name && importName.includes(b.name.toLowerCase());
-          }
+          const searchSpace = `${tx.name} ${tx.rawBankDescription || ''}`.toLowerCase();
+          const baseNameMatch = p.name && searchSpace.includes(p.name.toLowerCase());
+          const kwMatch = p.matchKeywords && Array.isArray(p.matchKeywords) && p.matchKeywords.length > 0 
+              ? p.matchKeywords.some(kw => searchSpace.includes(kw.trim().toLowerCase()))
+              : false;
+          
+          return baseNameMatch || kwMatch;
        });
        
-       if (matchedBill) {
-          const rawAmtStr = tx.amount ? tx.amount.toString().replace(/[^0-9.-]+/g,"") : "0";
-          const actualAmount = Math.abs(parseFloat(rawAmtStr)) || 0;
-          const isVariance = actualAmount > matchedBill.expectedAmount;
+       if (matchedProvider) {
+          const txD = tx.dateStr ? new Date(tx.dateStr) : new Date(tx.date);
+          const txMonth = !isNaN(txD.getTime()) ? txD.getMonth() + 1 : tx.month;
+          const txYear = !isNaN(txD.getTime()) ? txD.getFullYear() : tx.year;
           
-          proposals.push({
-             id: tx.id,
-             txName: tx.name,
-             txAmount: tx.amount,
-             txDate: tx.dateStr || `${tx.month}/${tx.year}`,
-             billName: matchedBill.name,
-             updates: {
-                billId: matchedBill.id,
-                status: 'cleared',
-                actualAmount: actualAmount,
-                varianceReason: isVariance ? 'Auto-Sweep Variance' : ''
-             }
-          });
+          const targetBillIdx = workingUnpaid.findIndex(b => b.providerId === matchedProvider.id && b.month === txMonth && b.year === txYear);
+          if (targetBillIdx !== -1) {
+             const targetBill = workingUnpaid[targetBillIdx];
+             const actualAmount = Math.abs(parseAmount(tx.amount));
+             const isVariance = actualAmount > targetBill.expectedAmount;
+             
+             proposals.push({
+                id: tx.id,
+                txName: tx.name,
+                txAmount: tx.amount,
+                txDate: tx.dateStr || `${tx.month}/${tx.year}`,
+                billName: `${matchedProvider.name} [${targetBill.year}-${String(targetBill.month).padStart(2,'0')}]`,
+                updates: {
+                   billId: targetBill.id,
+                   status: 'cleared',
+                   actualAmount: actualAmount,
+                   varianceReason: isVariance ? 'Auto-Sweep Variance' : ''
+                }
+             });
+             workingUnpaid.splice(targetBillIdx, 1);
+          }
        }
     });
     
@@ -201,18 +239,41 @@ export default function Transactions() {
                      <p className="font-semibold text-gray-900 text-lg flex items-center">
                         {tx.name}
                         {tab === 'matched' && (
-                           <span className="ml-3 text-xs font-bold px-2 py-0.5 rounded border bg-blue-50 border-blue-100 text-blue-700">Linked to: {bills.find(b=>b.id===tx.billId)?.name || 'Unknown'}</span>
+                           <span className="ml-3 text-xs font-bold px-2 py-0.5 rounded border bg-blue-50 border-blue-100 text-blue-700">
+                             Linked to: {(() => {
+                               const b = allBills.find(b => b.id === tx.billId);
+                               const p = b ? providers.find(p => p.id === b.providerId) : null;
+                               return p ? `${p.name} [${b.year}-${String(b.month).padStart(2,'0')}]` : 'Unknown';
+                             })()}
+                           </span>
                         )}
                      </p>
                      <p className="text-sm text-gray-500 font-medium tracking-wide mt-1 uppercase">Date: {tx.dateStr || `${tx.month}/${tx.year}`} <span className="mx-2">•</span> <span className="text-gray-800 font-bold bg-gray-100 px-2 py-0.5 rounded">{tx.amount}</span></p>
+                     {tx.rawBankDescription && (
+                        <p className="text-sm text-gray-400 mt-1.5 italic max-w-2xl break-words line-clamp-2">
+                           "{tx.rawBankDescription}"
+                        </p>
+                     )}
                   </div>
                   
                   <div className="flex items-center space-x-3">
                      {tab === 'unmatched' && linkModeTxId === tx.id ? (
                         <div className="flex items-center space-x-2 bg-blue-50 p-2 rounded-lg border border-blue-100">
-                           <select value={selectedBillId} onChange={e=>setSelectedBillId(e.target.value)} className="p-1.5 border rounded border-blue-200 text-sm">
-                              <option value="">Select template...</option>
-                              {bills.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                           <select value={selectedBillId} onChange={e=>setSelectedBillId(e.target.value)} className="p-1.5 border rounded border-blue-200 text-sm max-w-[200px] truncate">
+                              <option value="">Select bill instance...</option>
+                              {providers.map(p => {
+                                 const pBills = unpaidBills.filter(b => b.providerId === p.id);
+                                 if (pBills.length === 0) return null;
+                                 return (
+                                    <optgroup key={p.id} label={p.name}>
+                                       {pBills.map(b => (
+                                          <option key={b.id} value={b.id}>
+                                             [{b.year}-{String(b.month).padStart(2,'0')}] Due: €{b.expectedAmount.toFixed(2)}
+                                          </option>
+                                       ))}
+                                    </optgroup>
+                                 );
+                              })}
                            </select>
                            <Button onClick={() => handleManualLink(tx)} className="py-1.5 px-3 text-sm">Save Link</Button>
                            <button onClick={() => setLinkModeTxId(null)} className="text-gray-400 hover:text-gray-600 text-sm font-medium px-2">Cancel</button>

@@ -1,30 +1,88 @@
 import { db } from './firebase';
 import { collection, doc, setDoc, deleteDoc, query, where, getDocs, writeBatch } from 'firebase/firestore';
 
-export async function getBills(householdId) {
-  const q = query(collection(db, 'Households', householdId, 'bills'));
+export async function getProviders(householdId) {
+  const q = query(collection(db, 'Households', householdId, 'providers'));
   const querySnapshot = await getDocs(q);
   return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 }
 
-export async function addBill(householdId, billData) {
-  const newBillRef = doc(collection(db, 'Households', householdId, 'bills'));
-  const newBill = {
-    id: newBillRef.id,
+export async function addProvider(householdId, providerData) {
+  const newProviderRef = doc(collection(db, 'Households', householdId, 'providers'));
+  const newProvider = {
+    id: newProviderRef.id,
     householdId,
-    ...billData
+    ...providerData
   };
-  await setDoc(newBillRef, newBill);
-  return newBill;
+  await setDoc(newProviderRef, newProvider);
+  return newProvider;
 }
 
-export async function deleteBill(householdId, billId) {
-  await deleteDoc(doc(db, 'Households', householdId, 'bills', billId));
+export async function deleteProvider(householdId, providerId) {
+  await deleteDoc(doc(db, 'Households', householdId, 'providers', providerId));
 }
 
-export async function updateBill(householdId, billId, updates) {
-  const billRef = doc(db, 'Households', householdId, 'bills', billId);
-  await setDoc(billRef, updates, { merge: true });
+export async function updateProvider(householdId, providerId, updates) {
+  const providerRef = doc(db, 'Households', householdId, 'providers', providerId);
+  await setDoc(providerRef, updates, { merge: true });
+}
+
+export async function getGeneratedBills(householdId, month, year) {
+  let q = query(collection(db, 'Households', householdId, 'bills'));
+  if (month && year) {
+     q = query(collection(db, 'Households', householdId, 'bills'), 
+       where("month", "==", month), 
+       where("year", "==", year));
+  }
+  const querySnapshot = await getDocs(q);
+  return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+}
+
+export async function generateDueBills(householdId) {
+  // Scans providers and generates missing bills for up to the current month + 1 future month
+  const providers = await getProviders(householdId);
+  const existingBills = await getGeneratedBills(householdId);
+  
+  const batch = writeBatch(db);
+  const now = new Date();
+  let addedCount = 0;
+
+  // We look back 3 months and 1 month ahead to generate anything missing
+  const monthsToCheck = [];
+  for (let i = -3; i <= 1; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+    monthsToCheck.push({ month: d.getMonth() + 1, year: d.getFullYear() });
+  }
+
+  providers.forEach(provider => {
+    monthsToCheck.forEach(({ month, year }) => {
+      // Check if a bill instance already exists for this provider, month, and year
+      const exists = existingBills.some(b => b.providerId === provider.id && b.month === month && b.year === year);
+      
+      if (!exists) {
+        // Generate a deterministic bill ID to prevent double insertion in race conditions
+        const generatedBillId = `bill_${provider.id}_${year}_${month}`;
+        const newBillRef = doc(db, 'Households', householdId, 'bills', generatedBillId);
+        
+        batch.set(newBillRef, {
+          id: generatedBillId,
+          householdId,
+          providerId: provider.id,
+          month,
+          year,
+          expectedAmount: provider.expectedAmount,
+          expectedDay: provider.expectedDay || 1,
+          status: 'pending',
+          createdAt: new Date().toISOString()
+        });
+        addedCount++;
+      }
+    });
+  });
+
+  if (addedCount > 0) {
+    await batch.commit();
+  }
 }
 
 export async function getTransactions(householdId, month, year) {

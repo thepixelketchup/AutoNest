@@ -9,10 +9,14 @@ service cloud.firestore {
       allow read: if request.auth != null;
       // Only allow mutating the household if the user belongs to it (or is creating it)
       allow write: if request.auth != null && (
-        !resource.exists || 
+        resource == null || 
         get(/databases/$(database)/documents/Users/$(request.auth.uid)).data.householdId == householdId
       );
 
+      match /providers/{providerId} {
+        allow read, write: if request.auth != null && 
+          get(/databases/$(database)/documents/Users/$(request.auth.uid)).data.householdId == householdId;
+      }
       match /bills/{billId} {
         allow read, write: if request.auth != null && 
           get(/databases/$(database)/documents/Users/$(request.auth.uid)).data.householdId == householdId;

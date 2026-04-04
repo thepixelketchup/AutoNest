@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { getBills, getTransactions, saveBulkTransactions } from '../services/billService';
+import { getProviders, getGeneratedBills, getTransactions, saveBulkTransactions, generateDueBills } from '../services/billService';
 import { CsvUploader } from '../components/imports/CsvUploader';
 import { ColumnMapper } from '../components/imports/ColumnMapper';
 import { MatchingEngine } from '../components/imports/MatchingEngine';
@@ -16,10 +16,11 @@ export default function Imports() {
 
   const [rawCsvData, setRawCsvData] = useState([]);
   const [csvFields, setCsvFields] = useState([]);
-  const [mappedData, setMappedData] = useState([]);
-
-  const [pendingBills, setPendingBills] = useState([]);
+  const [allProviders, setAllProviders] = useState([]);
+  const [unpaidBills, setUnpaidBills] = useState([]);
   const [allBills, setAllBills] = useState([]);
+
+  const [mappedData, setMappedData] = useState([]);
 
   const [lastUploadDate, setLastUploadDate] = useState('');
   const [allExistingTxs, setAllExistingTxs] = useState([]);
@@ -46,18 +47,25 @@ export default function Imports() {
   async function fetchBills() {
     try {
       setLoadingBills(true);
-      const targetMonth = new Date().getMonth() + 1;
-      const targetYear = new Date().getFullYear();
-      const fetchedBills = await getBills(userProfile.householdId);
-      const fetchedTxs = await getTransactions(userProfile.householdId, targetMonth, targetYear);
+      await generateDueBills(userProfile.householdId);
+      const providers = await getProviders(userProfile.householdId);
+      const generatedBills = await getGeneratedBills(userProfile.householdId);
+      const allTxs = await getTransactions(userProfile.householdId);
 
-      const pending = fetchedBills.filter(bill => {
-        const tx = fetchedTxs.find(t => t.billId === bill.id);
-        return !tx || tx.status !== 'cleared';
+      const unpaid = generatedBills.filter(bill => {
+        const matchingTxs = allTxs.filter(t => t.billId === bill.id && t.status === 'cleared');
+        const sumPaid = matchingTxs.reduce((acc, t) => acc + (t.actualAmount || 0), 0);
+        return sumPaid < bill.expectedAmount * 0.95; // Account for tolerance logic
       });
 
-      setAllBills(fetchedBills);
-      setPendingBills(pending);
+      // Sort unpaid chronologically (oldest debts first)
+      unpaid.sort((a, b) => {
+         if (a.year !== b.year) return a.year - b.year;
+         return a.month - b.month;
+      });
+
+      setAllProviders(providers);
+      setUnpaidBills(unpaid);
     } catch (e) {
       addToast("Failed to fetch pending bills.", "error");
     } finally {
@@ -147,8 +155,12 @@ export default function Imports() {
           loadingBills ? (
             <div className="flex justify-center items-center h-64 text-blue-600 animate-pulse font-medium">Running Smart Match Engine...</div>
           ) : (
-            <MatchingEngine importedData={mappedData} bills={allBills} pendingBills={pendingBills} onComplete={handleComplete} />
-          )
+            <MatchingEngine 
+            importedData={mappedData} 
+            providers={allProviders}
+            unpaidBills={unpaidBills} 
+            onComplete={handleComplete} 
+          />)
         )}
       </div>
     </div>

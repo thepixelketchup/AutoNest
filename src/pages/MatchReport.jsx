@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
-import { getBills, getTransactions } from '../services/billService';
+import { getProviders, getGeneratedBills, generateDueBills, getTransactions } from '../services/billService';
 import { useToast } from '../hooks/useToast';
 
 export default function MatchReport() {
@@ -19,19 +19,21 @@ export default function MatchReport() {
    async function fetchReportData() {
       try {
          setLoading(true);
-         const [fetchedBills, fetchedTxs] = await Promise.all([
-            getBills(userProfile.householdId),
-            getTransactions(userProfile.householdId) // Assuming null month/year fetches all globally!
+         await generateDueBills(userProfile.householdId);
+         const [fetchedProviders, fetchedBills, fetchedTxs] = await Promise.all([
+            getProviders(userProfile.householdId),
+            getGeneratedBills(userProfile.householdId), // No month/year fetches all globally
+            getTransactions(userProfile.householdId) 
          ]);
 
-         // 1. Gather all unique YYYY-MM keys from transactions
+         // 1. Gather all unique YYYY-MM keys from generated bills natively
          const monthKeysSet = new Set(
-            fetchedTxs
-               .filter(t => t.month && t.year)
-               .map(t => `${t.year}-${String(t.month).padStart(2, '0')}`)
+            fetchedBills
+               .filter(b => b.month && b.year)
+               .map(b => `${b.year}-${String(b.month).padStart(2, '0')}`)
          );
 
-         // 2. We always want the current month shown, even if no transactions exist yet.
+         // 2. We always want the current month shown
          const now = new Date();
          const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
          monthKeysSet.add(currentMonthKey);
@@ -45,36 +47,45 @@ export default function MatchReport() {
             const year = parseInt(yearStr, 10);
             const month = parseInt(monthStr, 10);
 
-            const txsForMonth = fetchedTxs.filter(t => t.year === year && t.month === month && t.status === 'cleared');
+            // Find all generated bills for this explicit ledger month
+            const billsForMonth = fetchedBills.filter(b => b.year === year && b.month === month);
 
-            const ledger = fetchedBills.map(bill => {
-               const tx = txsForMonth.find(t => t.billId === bill.id);
+            const ledger = billsForMonth.map(bill => {
+               const provider = fetchedProviders.find(p => p.id === bill.providerId);
+               
+               // Relevant transactions explicitly point to this generated bill instance's ID!
+               const relevantTxs = fetchedTxs.filter(t => t.billId === bill.id && t.status === 'cleared');
+               const sumPaid = relevantTxs.reduce((acc, t) => acc + (t.actualAmount || 0), 0);
 
                let status = 'Pending';
-               if (tx && tx.actualAmount) {
-                  if (tx.actualAmount >= bill.expectedAmount * 0.95) status = 'Paid'; // adding small tolerance gap buffer
+               if (sumPaid > 0) {
+                  if (sumPaid >= bill.expectedAmount * 0.95) status = 'Paid'; 
                   else status = 'Partial';
                } else {
                   const currentM = now.getMonth() + 1;
                   const currentY = now.getFullYear();
                   if (year < currentY || (year === currentY && month < currentM)) {
                      status = 'Missed';
-                  } else {
-                     status = 'Pending';
                   }
                }
 
-               return { ...bill, tx, reportStatus: status };
+               return { 
+                  ...bill, 
+                  tx: relevantTxs.length > 0 ? relevantTxs[0] : null, 
+                  actualPaid: sumPaid, 
+                  reportStatus: status,
+                  name: provider?.name || 'Unknown Blueprint',
+                  category: provider?.category || 'Uncategorized',
+                  paymentMethod: provider?.paymentMethod || 'Direct Debit'
+               };
             });
 
             const expectedSum = ledger.reduce((acc, b) => acc + b.expectedAmount, 0);
-            const paidSum = ledger.reduce((acc, b) => acc + (b.tx?.actualAmount || 0), 0);
+            const paidSum = ledger.reduce((acc, b) => acc + b.actualPaid, 0);
             const missedCount = ledger.filter(b => b.reportStatus === 'Missed').length;
 
             return {
-               key,
-               year,
-               month,
+               key, year, month,
                label: new Date(year, month - 1).toLocaleString('default', { month: 'long', year: 'numeric' }),
                expectedSum,
                paidSum,
@@ -184,8 +195,8 @@ export default function MatchReport() {
                                     <span className="text-[14px] text-slate-800 font-bold">€ {bill.expectedAmount.toFixed(2)}</span>
                                  </div>
                                  <div className="flex flex-col justify-center">
-                                    <span className={`text-[14px] font-bold ${bill.tx?.actualAmount ? 'text-green-600' : 'text-gray-400'}`}>
-                                       {bill.tx?.actualAmount ? `€ ${bill.tx.actualAmount.toFixed(2)}` : '€ 0.00'}
+                                    <span className={`text-[14px] font-bold ${bill.actualPaid > 0 ? 'text-green-600' : 'text-gray-400'}`}>
+                                       {bill.actualPaid > 0 ? `€ ${bill.actualPaid.toFixed(2)}` : '€ 0.00'}
                                     </span>
                                  </div>
                               </div>
@@ -210,7 +221,7 @@ export default function MatchReport() {
                                              {bill.tx.dateStr || `${bill.tx.year}-${String(bill.tx.month).padStart(2, '0')}`} — {bill.tx.name || bill.tx.rawBankDescription}
                                           </span>
                                           <span className="font-mono font-bold tracking-tight whitespace-nowrap text-slate-700">
-                                             € {bill.tx.actualAmount.toFixed(2)}
+                                             € {bill.actualPaid.toFixed(2)}
                                           </span>
                                        </>
                                     ) : (

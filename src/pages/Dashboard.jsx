@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
-import { getBills, getTransactions, saveTransaction } from '../services/billService';
+import { getProviders, getGeneratedBills, generateDueBills, getTransactions, saveTransaction } from '../services/billService';
 import { ClearBillModal } from '../components/bills/ClearBillModal';
 import { useToast } from '../hooks/useToast';
 
@@ -29,11 +29,24 @@ export default function Dashboard() {
   async function fetchData() {
     try {
       setLoading(true);
-      const fetchedBills = await getBills(userProfile.householdId);
+      await generateDueBills(userProfile.householdId);
+      const fetchedProviders = await getProviders(userProfile.householdId);
+      const fetchedBills = await getGeneratedBills(userProfile.householdId, targetMonth, targetYear);
+      
+      const enrichedBills = fetchedBills.map(bill => {
+        const provider = fetchedProviders.find(p => p.id === bill.providerId);
+        return {
+          ...bill,
+          name: provider?.name || 'Unknown Provider',
+          category: provider?.category || 'Uncategorized'
+        };
+      });
+      
       const fetchedTxs = await getTransactions(userProfile.householdId, targetMonth, targetYear);
+      
       // Sort bills by expected day
-      fetchedBills.sort((a, b) => a.expectedDay - b.expectedDay);
-      setBills(fetchedBills);
+      enrichedBills.sort((a, b) => a.expectedDay - b.expectedDay);
+      setBills(enrichedBills);
       setTransactions(fetchedTxs);
     } catch (err) {
       addToast("Failed to sync dashboard data.", "error");
