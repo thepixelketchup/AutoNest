@@ -80,6 +80,7 @@ export default function Imports() {
       if (rawMappings && rawMappings.length > 0) {
         const finalTransactions = rawMappings.map(tx => ({
           ...tx,
+          dateStr: tx.date || tx.dateStr,
           id: tx.id || crypto.randomUUID(),
           status: 'unmatched',
           billId: null,

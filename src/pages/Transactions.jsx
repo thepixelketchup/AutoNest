@@ -23,10 +23,10 @@ function parseAmount(str) {
 function formatDDMMYYYY(dateInput) {
   if (!dateInput) return '';
   if (typeof dateInput === 'string' && dateInput.includes('-')) {
-     const parts = dateInput.split('-');
-     if (parts.length === 3 && parts[0].length === 4) {
-       return `${parts[2]}-${parts[1]}-${parts[0]}`;
-     }
+    const parts = dateInput.split('-');
+    if (parts.length === 3 && parts[0].length === 4) {
+      return `${parts[2]}-${parts[1]}-${parts[0]}`;
+    }
   }
   const d = new Date(dateInput);
   if (isNaN(d.valueOf())) return dateInput;
@@ -63,16 +63,16 @@ function BillSelector({ allBills, providers, txDate, selections, setSelections, 
     .map(b => ({ ...b, score: scoreBillForTx(b, txDate) }))
     .sort((a, b) => b.score - a.score);
 
-  const txAmt          = Math.abs(parseAmount(txAmount));
+  const txAmt = Math.abs(parseAmount(txAmount));
   // Available budget = total tx - what's already allocated via existing links
   const availableBudget = txAmt > 0 ? Math.max(0, txAmt - existingAllocated) : txAmt;
-  const totalNew        = Object.values(selections).reduce((s, v) => s + (Number(v) || 0), 0);
-  const isOverBudget    = totalNew > availableBudget + 0.005; // 0.5¢ tolerance
+  const totalNew = Object.values(selections).reduce((s, v) => s + (Number(v) || 0), 0);
+  const isOverBudget = totalNew > availableBudget + 0.005; // 0.5¢ tolerance
   // Progress bar: show existing + new vs total
-  const totalAllocated  = existingAllocated + totalNew;
-  const budgetLeft      = txAmt - totalAllocated;
-  const pctUsed         = txAmt > 0 ? (totalAllocated / txAmt) * 100 : 0;
-  
+  const totalAllocated = existingAllocated + totalNew;
+  const budgetLeft = txAmt - totalAllocated;
+  const pctUsed = txAmt > 0 ? (totalAllocated / txAmt) * 100 : 0;
+
   let dynColor = 'bg-blue-500';
   if (isOverBudget) dynColor = 'bg-red-500';
   else if (pctUsed > 99) dynColor = 'bg-green-500';
@@ -107,9 +107,8 @@ function BillSelector({ allBills, providers, txDate, selections, setSelections, 
     <div className="space-y-2">
       {/* Budget tracker strip */}
       {txAmt > 0 && (
-        <div className={`rounded-xl px-3.5 py-2.5 flex items-center justify-between text-xs font-semibold gap-3 ${
-          isOverBudget ? 'bg-red-50 border border-red-200' : 'bg-gray-50 border border-gray-200'
-        }`}>
+        <div className={`rounded-xl px-3.5 py-2.5 flex items-center justify-between text-xs font-semibold gap-3 ${isOverBudget ? 'bg-red-50 border border-red-200' : 'bg-gray-50 border border-gray-200'
+          }`}>
           <div className="flex items-center gap-3 flex-1 min-w-0">
             <span className={`shrink-0 ${isOverBudget ? 'text-red-600' : 'text-gray-500'}`}>
               {isOverBudget ? '⚠ Over budget!' : existingAllocated > 0 ? 'Remaining budget:' : 'Transaction budget:'}
@@ -118,9 +117,9 @@ function BillSelector({ allBills, providers, txDate, selections, setSelections, 
               {/* Existing allocation (blue) */}
               <div className="absolute top-0 bottom-0 left-0 bg-blue-300 transition-all duration-300" style={{ width: `${txAmt > 0 ? Math.min(100, (existingAllocated / txAmt) * 100) : 0}%` }} />
               <div className={`absolute top-0 bottom-0 transition-colors transition-all duration-300 ${dynColor}`}
-                style={{ 
+                style={{
                   left: `${txAmt > 0 ? Math.min(100, (existingAllocated / txAmt) * 100) : 0}%`,
-                  width: `${txAmt > 0 ? Math.min(100 - (existingAllocated / txAmt) * 100, (totalNew / txAmt) * 100) : 0}%` 
+                  width: `${txAmt > 0 ? Math.min(100 - (existingAllocated / txAmt) * 100, (totalNew / txAmt) * 100) : 0}%`
                 }} />
             </div>
           </div>
@@ -139,18 +138,17 @@ function BillSelector({ allBills, providers, txDate, selections, setSelections, 
       {/* Bill list */}
       <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
         {activeBills.map(bill => {
-          const prov      = providers.find(p => p.id === bill.providerId);
-          const isChk     = selections[bill.id] !== undefined;
+          const prov = providers.find(p => p.id === bill.providerId);
+          const isChk = selections[bill.id] !== undefined;
           const isDisabled = !isChk && txAmt > 0 && budgetLeft <= 0;
-          const totalDue  = (bill.amount || 0) + (bill.lateFee || 0);
+          const totalDue = (bill.amount || 0) + (bill.lateFee || 0);
           const remaining = Math.max(0, totalDue - (bill.totalPaid || 0));
           return (
             <div key={bill.id}
-              className={`rounded-xl border p-3 transition-all ${
-                isChk ? 'border-blue-300 bg-blue-50' : 
-                isDisabled ? 'border-gray-100 bg-gray-50/50 opacity-50 grayscale-[50%] cursor-not-allowed' :
-                'cursor-pointer border-gray-200 hover:border-blue-200 hover:bg-gray-50'
-              }`}>
+              className={`rounded-xl border p-3 transition-all ${isChk ? 'border-blue-300 bg-blue-50' :
+                  isDisabled ? 'border-gray-100 bg-gray-50/50 opacity-50 grayscale-[50%] cursor-not-allowed' :
+                    'cursor-pointer border-gray-200 hover:border-blue-200 hover:bg-gray-50'
+                }`}>
               <div className="flex items-center gap-3" onClick={() => { if (!isDisabled) toggleBill(bill.id, remaining); }}>
                 <input type="checkbox" readOnly checked={isChk} disabled={isDisabled} className="rounded accent-blue-600 w-4 h-4 shrink-0 cursor-[inherit]" />
                 <div className="flex-1 min-w-0">
@@ -160,15 +158,14 @@ function BillSelector({ allBills, providers, txDate, selections, setSelections, 
                 <div className="text-right shrink-0">
                   <p className="text-sm font-black text-gray-700">€ {totalDue.toFixed(2)}</p>
                   {(bill.lateFee || 0) > 0 && (
-                    <p className="text-[10px] text-amber-500">€ {(bill.amount||0).toFixed(2)} + € {(bill.lateFee||0).toFixed(2)} late fee</p>
+                    <p className="text-[10px] text-amber-500">€ {(bill.amount || 0).toFixed(2)} + € {(bill.lateFee || 0).toFixed(2)} late fee</p>
                   )}
                   {remaining < totalDue && (
                     <p className="text-[10px] text-green-600">Remaining: € {remaining.toFixed(2)}</p>
                   )}
-                  <span className={`text-[10px] font-bold ${
-                    bill.status === 'overdue' ? 'text-red-500' :
-                    bill.status === 'partial'  ? 'text-blue-500' : 'text-gray-400'
-                  }`}>{bill.status}</span>
+                  <span className={`text-[10px] font-bold ${bill.status === 'overdue' ? 'text-red-500' :
+                      bill.status === 'partial' ? 'text-blue-500' : 'text-gray-400'
+                    }`}>{bill.status}</span>
                 </div>
               </div>
 
@@ -182,9 +179,8 @@ function BillSelector({ allBills, providers, txDate, selections, setSelections, 
                       max={availableBudget > 0 ? availableBudget : undefined}
                       value={selections[bill.id]}
                       onChange={e => setSelections(prev => ({ ...prev, [bill.id]: parseAmount(e.target.value) || 0 }))}
-                      className={`w-full border rounded-lg pl-6 pr-2 py-1.5 text-sm focus:ring-1 outline-none ${
-                        isOverBudget ? 'border-red-300 focus:ring-red-400' : 'border-blue-200 focus:ring-blue-400'
-                      }`}
+                      className={`w-full border rounded-lg pl-6 pr-2 py-1.5 text-sm focus:ring-1 outline-none ${isOverBudget ? 'border-red-300 focus:ring-red-400' : 'border-blue-200 focus:ring-blue-400'
+                        }`}
                       onClick={e => e.stopPropagation()}
                     />
                   </div>
@@ -221,8 +217,8 @@ function BillSelector({ allBills, providers, txDate, selections, setSelections, 
 
 // ── LinkModal (manual one-off linking) ────────────────────────────────────────
 function LinkModal({ tx, allBills, providers, members, onSave, onClose, getAllocated }) {
-  const amountFloat    = parseAmount(tx.amount);
-  const isIncome       = amountFloat > 0;
+  const amountFloat = parseAmount(tx.amount);
+  const isIncome = amountFloat > 0;
   // Derive existing bill IDs from ALL sources — billIds array, legacy billId field, AND
   // keys of billAmounts map. This guards against any sync lag between the two fields.
   const existingBillIds = [
@@ -238,20 +234,20 @@ function LinkModal({ tx, allBills, providers, members, onSave, onClose, getAlloc
     if (amountFloat > 0) return 'member';
     return 'bill';
   });
-  
+
   const [selectedMemberId, setSMId] = useState('');
-  
+
   const [selections, setSelections] = useState(() => {
     if (amountFloat >= 0 || existingAllocated > 0) return {};
-    
+
     const searchSpace = `${tx.name || ''} ${tx.rawBankDescription || ''}`.toLowerCase();
-    
+
     const dm = members.find(m => {
       const nm = m.name && searchSpace.includes(m.name.toLowerCase());
       const kw = Array.isArray(m.matchKeywords) ? m.matchKeywords.some(k => searchSpace.includes(k.trim().toLowerCase())) : false;
       return nm || kw;
     });
-    
+
     const p = providers.find(p => {
       const nm = p.name && searchSpace.includes(p.name.toLowerCase());
       const kw = Array.isArray(p.matchKeywords) ? p.matchKeywords.some(k => searchSpace.includes(k.trim().toLowerCase())) : false;
@@ -259,7 +255,7 @@ function LinkModal({ tx, allBills, providers, members, onSave, onClose, getAlloc
     });
 
     if (dm && !p) return {};
-    
+
     if (p) {
       const txD = new Date(tx.dateStr || `${tx.year}-${tx.month}-01`);
       const candidateBills = allBills
@@ -308,9 +304,9 @@ function LinkModal({ tx, allBills, providers, members, onSave, onClose, getAlloc
     : linkMode === 'member'
       ? !!selectedMemberId
       : Object.keys(selections).length > 0 && !(() => {
-          const newAlloc = Object.values(selections).reduce((s, v) => s + (Number(v) || 0), 0);
-          return newAlloc > availableBudget + 0.005;
-        })();
+        const newAlloc = Object.values(selections).reduce((s, v) => s + (Number(v) || 0), 0);
+        return newAlloc > availableBudget + 0.005;
+      })();
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -396,17 +392,17 @@ function LinkModal({ tx, allBills, providers, members, onSave, onClose, getAlloc
 
 // ── SweepStepModal (one-by-one guided sweep) ──────────────────────────────────
 function SweepStepModal({ proposal, stepNum, totalSteps, allBills, providers, members, onApprove, onSkip, onClose }) {
-  const amtF    = parseAmount(proposal.txAmount);
+  const amtF = parseAmount(proposal.txAmount);
   const isIncome = amtF > 0;
 
   // Additionally show partial status banner if tx already has links
   const hasExistingLinks = (proposal.updates?.billId || (proposal.updates?.billIds?.length > 0));
-  const isContrib   = proposal.updates?.status === 'contribution';
+  const isContrib = proposal.updates?.status === 'contribution';
   const isDeduction = isContrib && (proposal.updates?.actualAmount || 0) < 0;
 
   // Pre-populate mode from proposal
   const defaultMode = isContrib ? 'member' : 'bill';
-  const [linkMode, setLinkMode]     = useState(defaultMode);
+  const [linkMode, setLinkMode] = useState(defaultMode);
   const [selectedMemberId, setSMId] = useState(isContrib ? (proposal.updates?.memberId || '') : '');
 
   // Pre-select the proposed bill
@@ -424,10 +420,10 @@ function SweepStepModal({ proposal, stepNum, totalSteps, allBills, providers, me
     : linkMode === 'member'
       ? !!selectedMemberId
       : Object.keys(selections).length > 0 && !(() => {
-          const txAmt = Math.abs(amtF);
-          const allocated = Object.values(selections).reduce((s, v) => s + (Number(v) || 0), 0);
-          return allocated > txAmt + 0.005;
-        })();
+        const txAmt = Math.abs(amtF);
+        const allocated = Object.values(selections).reduce((s, v) => s + (Number(v) || 0), 0);
+        return allocated > txAmt + 0.005;
+      })();
 
   const progress = (stepNum / totalSteps) * 100;
 
@@ -559,21 +555,21 @@ function SweepStepModal({ proposal, stepNum, totalSteps, allBills, providers, me
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function Transactions() {
   const { userProfile } = useAuth();
-  const { addToast }    = useToast();
-  const navigate        = useNavigate();
+  const { addToast } = useToast();
+  const navigate = useNavigate();
 
   const [transactions, setTransactions] = useState([]);
-  const [providers,    setProviders]    = useState([]);
-  const [members,      setMembers]      = useState([]);
-  const [allBills,     setAllBills]     = useState([]);
-  const [loading,      setLoading]      = useState(true);
-  const [tab,          setTab]          = useState('unmatched');
-  const [linkModalTx,  setLinkModalTx]  = useState(null);
-  const [search,       setSearch]       = useState('');
+  const [providers, setProviders] = useState([]);
+  const [members, setMembers] = useState([]);
+  const [allBills, setAllBills] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState('unmatched');
+  const [linkModalTx, setLinkModalTx] = useState(null);
+  const [search, setSearch] = useState('');
 
   // Step-by-step sweep state
   const [sweepQueue, setSweepQueue] = useState([]);
-  const [sweepStep,  setSweepStep]  = useState(0);
+  const [sweepStep, setSweepStep] = useState(0);
   const sweeping = sweepQueue.length > 0 && sweepStep < sweepQueue.length;
 
   useEffect(() => { if (userProfile?.householdId) fetchData(); }, [userProfile?.householdId]);
@@ -614,8 +610,8 @@ export default function Transactions() {
 
   const CENT = 0.01; // 1¢ tolerance
   const isContributionTx = (t) => t.status === 'contribution';
-  const hasAnyBillLink   = (t) => (t.billIds?.length > 0) || (t.billId != null);
-  const isFullySettled   = (t) => {
+  const hasAnyBillLink = (t) => (t.billIds?.length > 0) || (t.billId != null);
+  const isFullySettled = (t) => {
     if (!hasAnyBillLink(t)) return false;
     const txAmt = Math.abs(parseAmount(t.amount));
     return txAmt <= 0 || getAllocated(t) >= txAmt - CENT;
@@ -624,9 +620,9 @@ export default function Transactions() {
 
   // Matched = fully settled bills OR contributions
   // Unmatched = no links at all  OR partially settled (stays here so user can finish linking)
-  const matched   = transactions.filter(t => !t.isDeleted && (isContributionTx(t) || isFullySettled(t)));
+  const matched = transactions.filter(t => !t.isDeleted && (isContributionTx(t) || isFullySettled(t)));
   const unmatched = transactions.filter(t => !t.isDeleted && (!isContributionTx(t) && !isFullySettled(t)));
-  const deletedTxs= transactions.filter(t => t.isDeleted);
+  const deletedTxs = transactions.filter(t => t.isDeleted);
 
   const q = search.trim().toLowerCase();
   const txSource = tab === 'matched' ? matched : (tab === 'deleted' ? deletedTxs : unmatched);
@@ -970,33 +966,32 @@ export default function Transactions() {
               <p className="text-gray-400 font-medium">No transactions here.</p>
             </div>
           ) : viewList.map(tx => {
-            const amtF      = parseAmount(tx.amount);
-            const txAmt     = Math.abs(amtF);
+            const amtF = parseAmount(tx.amount);
+            const txAmt = Math.abs(amtF);
             const isContrib = isContributionTx(tx);
-            const isDeduct  = isContrib && (tx.actualAmount || 0) < 0;
-            const partial   = isPartiallySettled(tx);
+            const isDeduct = isContrib && (tx.actualAmount || 0) < 0;
+            const partial = isPartiallySettled(tx);
             const allocated = getAllocated(tx);
-            const allocPct  = txAmt > 0 ? Math.min(100, (allocated / txAmt) * 100) : 0;
-            const isIncome  = amtF > 0;
+            const allocPct = txAmt > 0 ? Math.min(100, (allocated / txAmt) * 100) : 0;
+            const isIncome = amtF > 0;
 
             const linkedBillIds = tx.billIds?.length > 0 ? tx.billIds : (tx.billId ? [tx.billId] : []);
-            const linkedBills   = linkedBillIds.map(id => allBills.find(b => b.id === id)).filter(Boolean);
-            const member        = members.find(m => m.id === tx.memberId);
+            const linkedBills = linkedBillIds.map(id => allBills.find(b => b.id === id)).filter(Boolean);
+            const member = members.find(m => m.id === tx.memberId);
 
             return (
               <div key={tx.id} className={`hover:bg-gray-50/50 transition-colors ${partial ? 'bg-amber-50/20' : ''}`}>
-                
+
                 {/* Desktop Grid Row */}
                 <div className="hidden md:grid items-center gap-4 px-6 py-4 min-h-[84px]"
                   style={{ gridTemplateColumns: '2fr 1fr 1fr 2fr 100px' }}>
-                  
+
                   {/* Column 1: Transaction name & desc */}
                   <div className="flex items-center gap-3 min-w-0 pr-4 w-full">
-                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-black text-sm shrink-0 shadow-sm ${
-                      isContrib
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-black text-sm shrink-0 shadow-sm ${isContrib
                         ? (isDeduct ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700')
                         : 'bg-indigo-100 text-indigo-700'
-                    }`}>
+                      }`}>
                       {tx.name?.charAt(0)?.toUpperCase() || '?'}
                     </div>
                     <div className="min-w-0 flex-1">
@@ -1032,7 +1027,7 @@ export default function Transactions() {
                         <span className="text-[10px] font-bold text-amber-600 shrink-0">{Math.round(allocPct)}%</span>
                       </div>
                     )}
-                    
+
                     <div className="flex flex-wrap gap-1">
                       {linkedBills.map(bill => {
                         const prov = providers.find(p => p.id === bill.providerId);
@@ -1070,11 +1065,10 @@ export default function Transactions() {
                       <>
                         {tab === 'unmatched' && (
                           <button onClick={() => setLinkModalTx(tx)}
-                            className={`flex items-center gap-1 px-3 py-1.5 text-[11px] font-bold rounded-lg transition border shadow-sm ${
-                              partial
+                            className={`flex items-center gap-1 px-3 py-1.5 text-[11px] font-bold rounded-lg transition border shadow-sm ${partial
                                 ? 'text-amber-700 border-amber-200 bg-amber-50 hover:bg-amber-100'
                                 : 'text-blue-700 border-blue-200 bg-blue-50 hover:bg-blue-100'
-                            }`}>
+                              }`}>
                             <span>{partial ? 'Add More' : 'Link'}</span>
                           </button>
                         )}
@@ -1099,17 +1093,16 @@ export default function Transactions() {
                 <div className="md:hidden flex flex-col p-4 gap-3">
                   <div className="flex justify-between items-start gap-3 flex-wrap">
                     <div className="flex items-center gap-2">
-                       <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-black text-sm shrink-0 shadow-sm ${
-                         isContrib
-                           ? (isDeduct ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700')
-                           : 'bg-indigo-100 text-indigo-700'
-                       }`}>
-                         {tx.name?.charAt(0)?.toUpperCase()}
-                       </div>
-                       <div className="min-w-0 pr-2 flex-1">
-                         <p className="font-semibold text-gray-800 text-sm truncate">{tx.name}</p>
-                         <p className="text-[10px] text-gray-400 mt-0.5 truncate">{formatDDMMYYYY(tx.dateStr || `${tx.year}-${tx.month}-01`)}</p>
-                       </div>
+                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-black text-sm shrink-0 shadow-sm ${isContrib
+                          ? (isDeduct ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700')
+                          : 'bg-indigo-100 text-indigo-700'
+                        }`}>
+                        {tx.name?.charAt(0)?.toUpperCase()}
+                      </div>
+                      <div className="min-w-0 pr-2 flex-1">
+                        <p className="font-semibold text-gray-800 text-sm truncate">{tx.name}</p>
+                        <p className="text-[10px] text-gray-400 mt-0.5 truncate">{formatDDMMYYYY(tx.dateStr || `${tx.year}-${tx.month}-01`)}</p>
+                      </div>
                     </div>
                     <div className="text-right shrink-0">
                       <p className={`text-sm font-black ${isIncome ? 'text-green-600' : 'text-gray-900'}`}>{tx.amount}</p>
