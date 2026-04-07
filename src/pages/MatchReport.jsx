@@ -72,9 +72,9 @@ export default function MatchReport() {
 
                let status = 'Pending';
                if (sumPaid > 0) {
-                  if (sumPaid >= billAmt * 0.95) status = 'Paid';
+                  if (sumPaid >= Math.abs(billAmt) * 0.95) status = 'Paid';
                   else status = 'Partial';
-               } else if (year < currentYear || (year === currentYear && month < currentMonth)) {
+               } else if (billAmt >= 0 && (year < currentYear || (year === currentYear && month < currentMonth))) {
                   status = 'Missed';
                }
 
@@ -91,7 +91,7 @@ export default function MatchReport() {
             });
 
             const expectedSum = ledger.reduce((acc, b) => acc + b.expectedAmount, 0);
-            const paidSum     = ledger.reduce((acc, b) => acc + b.actualPaid, 0);
+            const paidSum     = ledger.reduce((acc, b) => acc + (b.expectedAmount < 0 ? -b.actualPaid : b.actualPaid), 0);
             const missedCount = ledger.filter(b => b.reportStatus === 'Missed').length;
 
             return { key, year, month, label: new Date(year, month - 1).toLocaleString('default', { month: 'long', year: 'numeric' }), expectedSum, paidSum, missedCount, ledger };
@@ -112,9 +112,9 @@ export default function MatchReport() {
 
                let status = 'Pending';
                if (sumPaid > 0) {
-                  if (sumPaid >= billAmt * 0.95) status = 'Paid';
+                  if (sumPaid >= Math.abs(billAmt) * 0.95) status = 'Paid';
                   else status = 'Partial';
-               } else if (bill._year < currentYear || (bill._year === currentYear && bill._month < currentMonth)) {
+               } else if (billAmt >= 0 && (bill._year < currentYear || (bill._year === currentYear && bill._month < currentMonth))) {
                   status = 'Missed';
                }
 
@@ -129,7 +129,7 @@ export default function MatchReport() {
             });
 
             const expectedSum = ledger.reduce((acc, b) => acc + b.expectedAmount, 0);
-            const paidSum     = ledger.reduce((acc, b) => acc + b.actualPaid, 0);
+            const paidSum     = ledger.reduce((acc, b) => acc + (b.expectedAmount < 0 ? -b.actualPaid : b.actualPaid), 0);
             const missedCount = ledger.filter(b => b.reportStatus === 'Missed').length;
 
             return { id: provider.id, name: provider.name, category: provider.category, paymentMethod: provider.paymentMethod, expectedSum, paidSum, missedCount, ledger };
@@ -315,13 +315,14 @@ export default function MatchReport() {
                               </div>
 
                               {/* Middle Info: Expected vs Actual (Two Columns) */}
-                              <div className="grid grid-cols-2 gap-4">
+                              <div className="grid grid-cols-2 gap-4 mt-2">
                                  <div className="flex flex-col justify-center">
-                                    <span className="text-[14px] text-slate-800 font-bold">€ {bill.expectedAmount.toFixed(2)}</span>
+                                    <span className="text-[14px] text-slate-800 font-bold">{bill.expectedAmount < 0 ? '-' : ''}€ {Math.abs(bill.expectedAmount).toFixed(2)}</span>
+                                    {bill.expectedAmount < 0 && <span className="text-[10px] font-bold text-blue-500 mt-0.5 uppercase tracking-wide">Refund</span>}
                                  </div>
                                  <div className="flex flex-col justify-center">
                                     <span className={`text-[14px] font-bold ${bill.actualPaid > 0 ? 'text-green-600' : 'text-gray-400'}`}>
-                                       {bill.actualPaid > 0 ? `€ ${bill.actualPaid.toFixed(2)}` : '€ 0.00'}
+                                       {bill.actualPaid > 0 ? `${bill.expectedAmount < 0 ? '-' : ''}€ ${bill.actualPaid.toFixed(2)}` : '€ 0.00'}
                                     </span>
                                  </div>
                               </div>
@@ -348,7 +349,7 @@ export default function MatchReport() {
                                                 : `${bill.txs.length} transactions linked`}
                                           </span>
                                           <span className="font-mono font-bold tracking-tight whitespace-nowrap text-slate-700">
-                                             € {bill.actualPaid.toFixed(2)}
+                                             {bill.expectedAmount < 0 && bill.actualPaid > 0 ? '+' : ''}€ {bill.actualPaid.toFixed(2)}
                                           </span>
                                        </>
                                     ) : (
@@ -410,13 +411,14 @@ export default function MatchReport() {
                                      <div>
                                         <h4 className="text-[16px] font-bold text-slate-800 tracking-tight mb-1">{bill.label}</h4>
                                      </div>
-                                     <div className="grid grid-cols-2 gap-4">
+                                     <div className="grid grid-cols-2 gap-4 mt-2">
                                         <div className="flex flex-col justify-center">
-                                           <span className="text-[14px] text-slate-800 font-bold">€ {bill.expectedAmount.toFixed(2)}</span>
+                                           <span className="text-[14px] text-slate-800 font-bold">{bill.expectedAmount < 0 ? '-' : ''}€ {Math.abs(bill.expectedAmount).toFixed(2)}</span>
+                                           {bill.expectedAmount < 0 && <span className="text-[10px] font-bold text-blue-500 mt-0.5 uppercase tracking-wide">Refund</span>}
                                         </div>
                                         <div className="flex flex-col justify-center">
                                            <span className={`text-[14px] font-bold ${bill.actualPaid > 0 ? 'text-green-600' : 'text-gray-400'}`}>
-                                              {bill.actualPaid > 0 ? `€ ${bill.actualPaid.toFixed(2)}` : '€ 0.00'}
+                                              {bill.actualPaid > 0 ? `${bill.expectedAmount < 0 ? '-' : ''}€ ${bill.actualPaid.toFixed(2)}` : '€ 0.00'}
                                            </span>
                                         </div>
                                      </div>
@@ -435,7 +437,7 @@ export default function MatchReport() {
                                                        ? `${bill.txs[0].dateStr || `${bill.txs[0].year}-${String(bill.txs[0].month).padStart(2, '0')}`} — ${bill.txs[0].name || bill.txs[0].rawBankDescription}`
                                                        : `${bill.txs.length} transactions linked`}
                                                  </span>
-                                                 <span className="font-mono font-bold tracking-tight whitespace-nowrap text-slate-700">€ {bill.actualPaid.toFixed(2)}</span>
+                                                 <span className="font-mono font-bold tracking-tight whitespace-nowrap text-slate-700">{bill.expectedAmount < 0 && bill.actualPaid > 0 ? '+' : ''}€ {bill.actualPaid.toFixed(2)}</span>
                                               </>
                                            ) : <span className="text-gray-400 italic w-full text-center">No transactions matched.</span>}
                                         </div>

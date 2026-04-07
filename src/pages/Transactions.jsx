@@ -142,7 +142,9 @@ function BillSelector({ allBills, providers, txDate, selections, setSelections, 
           const isChk = selections[bill.id] !== undefined;
           const isDisabled = !isChk && txAmt > 0 && budgetLeft <= 0;
           const totalDue = (bill.amount || 0) + (bill.lateFee || 0);
-          const remaining = Math.max(0, totalDue - (bill.totalPaid || 0));
+          const remaining = totalDue < 0 
+            ? Math.abs(totalDue) - Math.abs(bill.totalPaid || 0)
+            : Math.max(0, totalDue - (bill.totalPaid || 0));
           return (
             <div key={bill.id}
               className={`rounded-xl border p-3 transition-all ${isChk ? 'border-blue-300 bg-blue-50' :
@@ -178,7 +180,7 @@ function BillSelector({ allBills, providers, txDate, selections, setSelections, 
                       type="number" step="0.01" min="0"
                       max={availableBudget > 0 ? availableBudget : undefined}
                       value={selections[bill.id]}
-                      onChange={e => setSelections(prev => ({ ...prev, [bill.id]: parseAmount(e.target.value) || 0 }))}
+                      onChange={e => setSelections(prev => ({ ...prev, [bill.id]: e.target.value === '' ? '' : parseAmount(e.target.value) }))}
                       className={`w-full border rounded-lg pl-6 pr-2 py-1.5 text-sm focus:ring-1 outline-none ${isOverBudget ? 'border-red-300 focus:ring-red-400' : 'border-blue-200 focus:ring-blue-400'
                         }`}
                       onClick={e => e.stopPropagation()}
@@ -299,11 +301,9 @@ function LinkModal({ tx, allBills, providers, members, onSave, onClose, getAlloc
 
   const txDate = tx.dateStr ? new Date(tx.dateStr) : new Date();
 
-  const canSave = isIncome
+  const canSave = linkMode === 'member'
     ? !!selectedMemberId
-    : linkMode === 'member'
-      ? !!selectedMemberId
-      : Object.keys(selections).length > 0 && !(() => {
+    : Object.keys(selections).length > 0 && !(() => {
         const newAlloc = Object.values(selections).reduce((s, v) => s + (Number(v) || 0), 0);
         return newAlloc > availableBudget + 0.005;
       })();
@@ -328,53 +328,44 @@ function LinkModal({ tx, allBills, providers, members, onSave, onClose, getAlloc
         </div>
 
         <div className="p-5 space-y-4 overflow-y-auto">
-          {isIncome ? (
-            <>
-              <p className="text-sm text-green-700 font-semibold bg-green-50 rounded-lg px-3 py-2">
+          <>
+            {isIncome && linkMode === 'member' && (
+              <p className="text-sm text-green-700 font-semibold bg-green-50 rounded-lg px-3 py-2 mb-4">
                 ↑ Positive amount — attribute as a member contribution
               </p>
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-gray-500 mb-1.5">Select Contributor</label>
+            )}
+            
+            <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
+              {[['bill', isIncome ? 'Provider Refund (Bills)' : 'Link to Bills'], ['member', isIncome ? 'Member Contribution' : 'Deduct from Member']].map(([v, l]) => (
+                <button key={v} type="button"
+                  onClick={() => { setLinkMode(v); setSelections({}); setSMId(''); }}
+                  className={`flex-1 py-1.5 text-sm font-bold rounded-lg transition-all ${linkMode === v ? 'bg-white shadow text-blue-700' : 'text-gray-500'}`}>{l}
+                </button>
+              ))}
+            </div>
+            
+            {linkMode === 'bill' ? (
+              <>
+                <label className="block text-xs font-bold uppercase tracking-wider text-gray-500">
+                  Select Bills {Object.keys(selections).length > 0 && <span className="text-blue-600">({Object.keys(selections).length} selected)</span>}
+                </label>
+                <BillSelector allBills={allBills} providers={providers} txDate={txDate}
+                  txAmount={Math.abs(amountFloat)}
+                  existingBillIds={existingBillIds}
+                  existingAllocated={existingAllocated}
+                  selections={selections} setSelections={setSelections} />
+              </>
+            ) : (
+              <>
+                {!isIncome && <p className="text-sm text-red-600 font-semibold bg-red-50 rounded-lg px-3 py-2">↓ Deduct from a member's balance</p>}
                 <select value={selectedMemberId} onChange={e => setSMId(e.target.value)}
                   className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
                   <option value="">— Select Member —</option>
                   {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
                 </select>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
-                {[['bill', 'Link to Bills'], ['member', 'Deduct from Member']].map(([v, l]) => (
-                  <button key={v} type="button"
-                    onClick={() => { setLinkMode(v); setSelections({}); setSMId(''); }}
-                    className={`flex-1 py-1.5 text-sm font-bold rounded-lg transition-all ${linkMode === v ? 'bg-white shadow text-blue-700' : 'text-gray-500'}`}>{l}
-                  </button>
-                ))}
-              </div>
-              {linkMode === 'bill' ? (
-                <>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-gray-500">
-                    Select Bills {Object.keys(selections).length > 0 && <span className="text-blue-600">({Object.keys(selections).length} selected)</span>}
-                  </label>
-                  <BillSelector allBills={allBills} providers={providers} txDate={txDate}
-                    txAmount={Math.abs(amountFloat)}
-                    existingBillIds={existingBillIds}
-                    existingAllocated={existingAllocated}
-                    selections={selections} setSelections={setSelections} />
-                </>
-              ) : (
-                <>
-                  <p className="text-sm text-red-600 font-semibold bg-red-50 rounded-lg px-3 py-2">↓ Deduct from a member's balance</p>
-                  <select value={selectedMemberId} onChange={e => setSMId(e.target.value)}
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
-                    <option value="">— Select Member —</option>
-                    {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                  </select>
-                </>
-              )}
-            </>
-          )}
+              </>
+            )}
+          </>
         </div>
 
         <div className="px-6 pb-5 pt-3 border-t border-gray-100 flex justify-end gap-3 shrink-0">
@@ -415,11 +406,9 @@ function SweepStepModal({ proposal, stepNum, totalSteps, allBills, providers, me
 
   const txDate = proposal.txDate ? new Date(proposal.txDate) : new Date();
 
-  const canApprove = isIncome
+  const canApprove = linkMode === 'member'
     ? !!selectedMemberId
-    : linkMode === 'member'
-      ? !!selectedMemberId
-      : Object.keys(selections).length > 0 && !(() => {
+    : Object.keys(selections).length > 0 && !(() => {
         const txAmt = Math.abs(amtF);
         const allocated = Object.values(selections).reduce((s, v) => s + (Number(v) || 0), 0);
         return allocated > txAmt + 0.005;
@@ -472,58 +461,48 @@ function SweepStepModal({ proposal, stepNum, totalSteps, allBills, providers, me
 
         {/* Editable link section */}
         <div className="p-5 space-y-4 overflow-y-auto flex-1">
-          {isIncome ? (
-            <>
-              <p className="text-sm text-green-700 font-semibold bg-green-50 rounded-lg px-3 py-2">
+          <>
+            {isIncome && linkMode === 'member' && (
+              <p className="text-sm text-green-700 font-semibold bg-green-50 rounded-lg px-3 py-2 mb-4">
                 ↑ Positive amount — attribute as a member contribution
               </p>
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-gray-500 mb-1.5">Select Contributor</label>
+            )}
+            
+            <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
+              {[['bill', isIncome ? 'Provider Refund (Bills)' : 'Link to Bills'], ['member', isIncome ? 'Member Contribution' : 'Deduct from Member']].map(([v, l]) => (
+                <button key={v} type="button"
+                  onClick={() => { setLinkMode(v); setSelections({}); setSMId(''); }}
+                  className={`flex-1 py-1.5 text-sm font-bold rounded-lg transition-all ${linkMode === v ? 'bg-white shadow text-blue-700' : 'text-gray-500'}`}>
+                  {l}
+                </button>
+              ))}
+            </div>
+
+            {linkMode === 'bill' ? (
+              <>
+                <label className="block text-xs font-bold uppercase tracking-wider text-gray-500">
+                  Select Bills{Object.keys(selections).length > 0 && <span className="text-blue-600 ml-1">({Object.keys(selections).length} selected)</span>}
+                </label>
+                <BillSelector
+                  allBills={allBills}
+                  providers={providers}
+                  txDate={txDate}
+                  txAmount={Math.abs(amtF)}
+                  selections={selections}
+                  setSelections={setSelections}
+                />
+              </>
+            ) : (
+              <>
+                {!isIncome && <p className="text-sm text-red-600 font-semibold bg-red-50 rounded-lg px-3 py-2">↓ Deduct from a member's balance</p>}
                 <select value={selectedMemberId} onChange={e => setSMId(e.target.value)}
                   className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
                   <option value="">— Select Member —</option>
                   {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
                 </select>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
-                {[['bill', 'Link to Bills'], ['member', 'Deduct from Member']].map(([v, l]) => (
-                  <button key={v} type="button"
-                    onClick={() => { setLinkMode(v); setSelections({}); setSMId(''); }}
-                    className={`flex-1 py-1.5 text-sm font-bold rounded-lg transition-all ${linkMode === v ? 'bg-white shadow text-blue-700' : 'text-gray-500'}`}>
-                    {l}
-                  </button>
-                ))}
-              </div>
-
-              {linkMode === 'bill' ? (
-                <>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-gray-500">
-                    Select Bills{Object.keys(selections).length > 0 && <span className="text-blue-600 ml-1">({Object.keys(selections).length} selected)</span>}
-                  </label>
-                  <BillSelector
-                    allBills={allBills}
-                    providers={providers}
-                    txDate={txDate}
-                    txAmount={Math.abs(amtF)}
-                    selections={selections}
-                    setSelections={setSelections}
-                  />
-                </>
-              ) : (
-                <>
-                  <p className="text-sm text-red-600 font-semibold bg-red-50 rounded-lg px-3 py-2">↓ Deduct from a member's balance</p>
-                  <select value={selectedMemberId} onChange={e => setSMId(e.target.value)}
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
-                    <option value="">— Select Member —</option>
-                    {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                  </select>
-                </>
-              )}
-            </>
-          )}
+              </>
+            )}
+          </>
         </div>
 
         {/* Footer actions */}
@@ -637,15 +616,12 @@ export default function Transactions() {
     const tx = transactions.find(t => t.id === txId);
     const amountFloat = tx ? parseAmount(tx.amount) : 0;
 
-    if (isIncome) {
+    if (linkMode === 'member') {
       await updateTransaction(userProfile.householdId, txId, {
         memberId: selectedMemberId, billId: null, billIds: [],
-        status: 'contribution', actualAmount: Math.abs(amountFloat), varianceReason: '',
-      });
-    } else if (linkMode === 'member') {
-      await updateTransaction(userProfile.householdId, txId, {
-        memberId: selectedMemberId, billId: null, billIds: [],
-        status: 'contribution', actualAmount: -Math.abs(amountFloat), varianceReason: 'Deduction',
+        status: 'contribution', 
+        actualAmount: isIncome ? Math.abs(amountFloat) : -Math.abs(amountFloat), 
+        varianceReason: isIncome ? '' : 'Deduction',
       });
     } else {
       for (const [billId, paidAmt] of Object.entries(selections)) {
@@ -680,39 +656,30 @@ export default function Transactions() {
       const amountFloat = parseAmount(tx.amount);
       const searchSpace = `${tx.name || ''} ${tx.rawBankDescription || ''}`.toLowerCase();
 
-      if (amountFloat > 0) {
-        const m = members.find(m => {
-          const nm = m.name && searchSpace.includes(m.name.toLowerCase());
-          const kw = Array.isArray(m.matchKeywords) ? m.matchKeywords.some(k => searchSpace.includes(k.trim().toLowerCase())) : false;
-          return nm || kw;
-        });
-        if (m) proposals.push({
-          id: tx.id, txName: tx.name, txAmount: tx.amount,
-          txDate: tx.dateStr || `${tx.month}/${tx.year}`,
-          billName: `Contribution → ${m.name}`,
-          updates: { memberId: m.id, billId: null, billIds: [], status: 'contribution', actualAmount: Math.abs(amountFloat) },
-        });
-        return;
-      }
-
-      // Negative → member deduction first
-      const dm = members.find(m => {
+      // 1. Try to find a Member Match (prioritizing Deductions or Contributions based on sign)
+      const mMatch = members.find(m => {
         const nm = m.name && searchSpace.includes(m.name.toLowerCase());
         const kw = Array.isArray(m.matchKeywords) ? m.matchKeywords.some(k => searchSpace.includes(k.trim().toLowerCase())) : false;
         return nm || kw;
       });
+      
+      // 2. Try to find a Provider Match
       const p = providers.find(p => {
         const nm = p.name && searchSpace.includes(p.name.toLowerCase());
         const kw = Array.isArray(p.matchKeywords) ? p.matchKeywords.some(k => searchSpace.includes(k.trim().toLowerCase())) : false;
         return nm || kw;
       });
 
-      if (dm && !p) {
+      if (mMatch && !p) {
         proposals.push({
           id: tx.id, txName: tx.name, txAmount: tx.amount,
           txDate: tx.dateStr || `${tx.month}/${tx.year}`,
-          billName: `Deduction from ${dm.name}`,
-          updates: { memberId: dm.id, billId: null, billIds: [], status: 'contribution', actualAmount: -Math.abs(amountFloat), varianceReason: 'Deduction' },
+          billName: amountFloat > 0 ? `Contribution → ${mMatch.name}` : `Deduction from ${mMatch.name}`,
+          updates: { 
+            memberId: mMatch.id, billId: null, billIds: [], status: 'contribution', 
+            actualAmount: amountFloat > 0 ? Math.abs(amountFloat) : -Math.abs(amountFloat), 
+            varianceReason: amountFloat > 0 ? '' : 'Deduction' 
+          },
         });
         return;
       }
@@ -1011,7 +978,7 @@ export default function Transactions() {
 
                   {/* Column 3: Amount */}
                   <div>
-                    <p className={`text-sm font-black ${isIncome ? 'text-green-600' : 'text-gray-900'}`}>{tx.amount}</p>
+                    <p className={`text-sm font-black ${isIncome ? 'text-green-600' : 'text-gray-900'}`}>{isIncome && !tx.amount.toString().startsWith('+') ? '+' : ''}{tx.amount}</p>
                     {!isContrib && tab === 'matched' && allocated > 0 && (
                       <p className="text-[10px] font-semibold text-green-600 mt-0.5">✓ {allocPct.toFixed(0)}% settled</p>
                     )}
@@ -1032,10 +999,12 @@ export default function Transactions() {
                       {linkedBills.map(bill => {
                         const prov = providers.find(p => p.id === bill.providerId);
                         const billAlloc = tx.billAmounts?.[bill.id];
+                        
                         return (
                           <span key={bill.id} className="group inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded bg-blue-50 border border-blue-100 text-blue-700">
+                            {isIncome && <span className="font-normal opacity-70">Refund</span>}
                             {prov?.name || '—'} · {getBillPeriodLabel(bill)}
-                            {billAlloc !== undefined && <span className="ml-1 text-blue-400 font-normal">€{Number(billAlloc).toFixed(2)}</span>}
+                            {billAlloc !== undefined && <span className="ml-1 text-blue-400 font-normal">{isIncome ? '+' : ''}€{Number(billAlloc).toFixed(2)}</span>}
                             <button onClick={e => { e.stopPropagation(); handleUnlinkOne(tx, bill.id); }}
                               className="ml-0.5 text-blue-300 hover:text-red-500 transition opacity-0 group-hover:opacity-100" title="Unlink">
                               <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg>
@@ -1105,7 +1074,7 @@ export default function Transactions() {
                       </div>
                     </div>
                     <div className="text-right shrink-0">
-                      <p className={`text-sm font-black ${isIncome ? 'text-green-600' : 'text-gray-900'}`}>{tx.amount}</p>
+                      <p className={`text-sm font-black ${isIncome ? 'text-green-600' : 'text-gray-900'}`}>{isIncome && !tx.amount.toString().startsWith('+') ? '+' : ''}{tx.amount}</p>
                     </div>
                   </div>
 
@@ -1126,10 +1095,12 @@ export default function Transactions() {
                       {linkedBills.map(bill => {
                         const prov = providers.find(p => p.id === bill.providerId);
                         const billAlloc = tx.billAmounts?.[bill.id];
+                        
                         return (
                           <span key={bill.id} className="group inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded bg-blue-50 border border-blue-100 text-blue-700">
+                            {isIncome && <span className="font-normal opacity-70">Refund</span>}
                             {prov?.name || '—'} · {getBillPeriodLabel(bill)}
-                            {billAlloc !== undefined && <span className="ml-1 text-blue-400 font-normal">€{Number(billAlloc).toFixed(2)}</span>}
+                            {billAlloc !== undefined && <span className="ml-1 text-blue-400 font-normal">{isIncome ? '+' : ''}€{Number(billAlloc).toFixed(2)}</span>}
                             <button onClick={e => { e.stopPropagation(); handleUnlinkOne(tx, bill.id); }}
                               className="ml-0.5 text-blue-300 hover:text-red-500 transition">
                               <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg>

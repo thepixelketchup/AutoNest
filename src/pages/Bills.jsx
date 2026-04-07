@@ -243,7 +243,7 @@ function BillFormModal({ providers, editBill, onSave, onClose, modalYears }) {
               <label className={labelCls}>Bill Amount *</label>
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm font-bold">€</span>
-                <input type="number" step="0.01" min="0" value={form.amount} onChange={e => set('amount', e.target.value)} required
+                <input type="number" step="0.01" value={form.amount} onChange={e => set('amount', e.target.value)} required
                   placeholder="0.00" className={`${inputCls} pl-7`} />
               </div>
             </div>
@@ -404,7 +404,7 @@ function RecurringBillModal({ providers, bills, household, onSave, onClose, moda
               <label className={labelCls}>Bill Amount *</label>
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm font-bold">€</span>
-                <input type="number" step="0.01" min="0" value={form.amount} onChange={e => set('amount', e.target.value)}
+                <input type="number" step="0.01" value={form.amount} onChange={e => set('amount', e.target.value)}
                   placeholder="0.00" className={`${inputCls} pl-7`} />
               </div>
               <p className="text-[11px] text-gray-400 mt-1">Same amount applied to every month</p>
@@ -602,8 +602,14 @@ export default function Bills() {
   // Summary totals for filtered set
   const totalAmount = filteredBills.reduce((s, b) => s + (b.amount || 0), 0);
   const totalLateFee = filteredBills.reduce((s, b) => s + (b.lateFee || 0), 0);
-  const totalPaid = filteredBills.reduce((s, b) => s + (b.totalPaid || 0), 0);
-  const totalGap = (totalAmount + totalLateFee) - totalPaid;
+  const totalPaid = filteredBills.reduce((s, b) => {
+    const amt = (b.amount || 0) + (b.lateFee || 0);
+    return s + (amt < 0 ? -(b.totalPaid || 0) : (b.totalPaid || 0));
+  }, 0);
+  const totalGap = filteredBills.reduce((s, b) => {
+    const amt = (b.amount || 0) + (b.lateFee || 0);
+    return s + (amt < 0 ? amt + (b.totalPaid || 0) : amt - (b.totalPaid || 0));
+  }, 0);
 
   async function handleSave(billData) {
     try {
@@ -763,7 +769,7 @@ export default function Bills() {
           { l: 'Total Late Fees', v: fmt(totalLateFee), c: 'text-amber-600' },
           { l: 'Total Amount', v: fmt(totalAmount + totalLateFee), c: 'text-gray-900' },
           { l: 'Total Paid', v: fmt(totalPaid), c: 'text-green-700' },
-          { l: 'Total Outstanding', v: fmt(Math.max(0, totalGap)), c: totalGap > 0 ? 'text-red-600' : 'text-green-600' },
+          { l: 'Total Outstanding', v: fmt(totalGap), c: Math.abs(totalGap) > 0.01 ? 'text-red-600' : 'text-green-600' },
         ].map(s => (
           <div key={s.l} className="bg-white rounded-xl border border-gray-200 px-4 py-3">
             <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400 mb-1">{s.l}</p>
@@ -798,7 +804,8 @@ export default function Bills() {
               {filteredBills.map(bill => {
                 const prov = providers.find(p => p.id === bill.providerId);
                 const s = STATUS_STYLE[bill.status] || STATUS_STYLE.pending;
-                const gap = ((bill.amount || 0) + (bill.lateFee || 0)) - (bill.totalPaid || 0);
+                const amtWithFee = (bill.amount || 0) + (bill.lateFee || 0);
+                const gap = amtWithFee < 0 ? amtWithFee + (bill.totalPaid || 0) : amtWithFee - (bill.totalPaid || 0);
                 const linkedTxs = getLinkedTxs(bill);
 
                 return (
@@ -842,9 +849,14 @@ export default function Bills() {
                       {/* Paid — with Pending sub-line when partial */}
                       <div>
                         <p className={`text-sm font-black ${(bill.totalPaid || 0) > 0 ? 'text-green-600' : 'text-gray-400'
-                          }`}>{fmt(bill.totalPaid)}</p>
-                        {gap > 0 && (bill.totalPaid || 0) > 0 && (
-                          <p className="text-[10px] font-semibold text-red-500 mt-0.5">{fmt(gap)} outstanding</p>
+                          }`}>{fmt(amtWithFee < 0 ? -(bill.totalPaid || 0) : (bill.totalPaid || 0))}</p>
+                        {amtWithFee < 0 && (
+                          <p className="text-[10px] font-bold text-blue-500 mt-0.5 tracking-wide">Refund</p>
+                        )}
+                        {Math.abs(gap) > 0.01 && (bill.totalPaid || 0) > 0 && (
+                          <p className={`text-[10px] font-semibold mt-0.5 ${amtWithFee < 0 ? 'text-blue-500' : 'text-red-500'}`}>
+                            {fmt(Math.abs(gap))} {amtWithFee < 0 ? 'pending refund' : 'outstanding'}
+                          </p>
                         )}
                       </div>
 
@@ -924,11 +936,12 @@ export default function Bills() {
                         </div>
                         <div className="bg-gray-50 rounded-lg p-2">
                           <p className="text-gray-400">Paid</p>
-                          <p className="font-black text-green-600">{fmt(bill.totalPaid)}</p>
+                          <p className="font-black text-green-600">{fmt(((bill.amount || 0) + (bill.lateFee || 0)) < 0 ? -(bill.totalPaid || 0) : (bill.totalPaid || 0))}</p>
+                          {((bill.amount || 0) + (bill.lateFee || 0)) < 0 && <p className="text-[9px] text-blue-500 font-bold mt-0.5 tracking-wide uppercase">Refund</p>}
                         </div>
                         <div className="bg-gray-50 rounded-lg p-2">
                           <p className="text-gray-400">Gap</p>
-                          <p className={`font-black ${gap > 0 ? 'text-red-500' : 'text-green-600'}`}>{gap > 0 ? fmt(gap) : '—'}</p>
+                          <p className={`font-black ${Math.abs(gap) > 0.01 ? (((bill.amount || 0) + (bill.lateFee || 0)) < 0 ? 'text-blue-500' : 'text-red-500') : 'text-green-600'}`}>{Math.abs(gap) > 0.01 ? fmt(Math.abs(gap)) : '—'}</p>
                         </div>
                       </div>
                       {/* Mobile action buttons — also blocked when linked */}
@@ -967,7 +980,7 @@ export default function Bills() {
               </div>
               <div>
                 <p className="text-sm font-black text-green-700">{fmt(totalPaid)}</p>
-                {totalGap > 0 && totalPaid > 0 && (
+                {Math.abs(totalGap) > 0.01 && totalPaid > 0 && (
                   <p className="text-[10px] font-semibold text-red-500">{fmt(totalGap)} outstanding</p>
                 )}
               </div>

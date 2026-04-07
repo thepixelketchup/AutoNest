@@ -5,10 +5,18 @@ import {
 } from 'firebase/firestore';
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
-// totalDue = amount + lateFee — that is what must be paid to clear the bill
 function computeBillStatus(amount, lateFee, totalPaid, dueDate) {
   const totalDue = Number(amount || 0) + Number(lateFee || 0);
   const paid     = Number(totalPaid || 0);
+  
+  // 1. ISOLATED NEGATIVE BILL LOGIC (Refunds)
+  if (totalDue < 0) {
+    if (paid >= Math.abs(totalDue) - 0.01) return 'cleared';
+    if (paid > 0) return 'partial';
+    return 'pending';
+  }
+
+  // 2. STANDARD POSITIVE BILL LOGIC
   if (totalDue > 0 && paid >= totalDue - 0.01) return 'cleared';
   if (paid > 0) return 'partial';
   if (dueDate && new Date(dueDate) < new Date()) return 'overdue';

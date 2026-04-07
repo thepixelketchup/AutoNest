@@ -7,7 +7,7 @@ import { getHousehold } from '../services/householdService';
 import { useToast } from '../hooks/useToast';
 
 // ── helpers ─────────────────────────────────────────────────────────────────
-const fmt = (n) => `€ ${Math.abs(Number(n || 0)).toFixed(2)}`;
+const fmt = (n) => `${Number(n || 0) < 0 ? '-' : ''}€ ${Math.abs(Number(n || 0)).toFixed(2)}`;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 function RingProgress({ pct = 0, size = 130, stroke = 13, color = '#3b82f6' }) {
@@ -141,12 +141,15 @@ export default function Dashboard() {
   });
 
   const totalExpected = enrichedBills.reduce((s, b) => s + (b.amount || 0) + (b.lateFee || 0), 0);
-  const totalPaid = enrichedBills.filter(b => b.tx).reduce((s, b) => s + (b.tx?.actualAmount || 0), 0);
+  const totalPaid = enrichedBills.filter(b => b.tx).reduce((s, b) => s + ((b.amount || 0) < 0 ? -(b.tx?.actualAmount || 0) : (b.tx?.actualAmount || 0)), 0);
   const totalRemaining = enrichedBills.filter(b => !b.tx).reduce((s, b) => s + (b.amount || 0) + (b.lateFee || 0), 0);
   const totalFines = enrichedBills.reduce((s, b) => s + (b.lateFee || 0), 0);
   const totalFinesPaid = enrichedBills.filter(b => b.tx).reduce((s, b) => s + (b.lateFee || 0), 0);
   const clearedCount = enrichedBills.filter(b => b.tx).length;
-  const paidPct = totalExpected > 0 ? (totalPaid / totalExpected) * 100 : 0;
+  // Use sum of absolutes to determine % paid if there are refunds mixed in, or simple magnitude checking
+  const absExpected = enrichedBills.reduce((s, b) => s + Math.abs((b.amount || 0) + (b.lateFee || 0)), 0);
+  const absPaid = enrichedBills.filter(b => b.tx).reduce((s, b) => s + Math.abs(b.tx?.actualAmount || 0), 0);
+  const paidPct = absExpected > 0 ? (absPaid / absExpected) * 100 : 0;
   const overdueBills = selectedPeriod === 'this_month'
     ? enrichedBills.filter(b => !b.tx && b.billingPeriod?.type === 'month' && b.status === 'overdue')
     : [];
@@ -159,10 +162,10 @@ export default function Dashboard() {
   const providerSpend = providers.map(p => {
     const pBills = enrichedBills.filter(b => b.providerId === p.id);
     const expected = pBills.reduce((s, b) => s + (b.amount || 0) + (b.lateFee || 0), 0);
-    const paid = pBills.filter(b => b.tx).reduce((s, b) => s + (b.tx?.actualAmount || 0), 0);
+    const paid = pBills.filter(b => b.tx).reduce((s, b) => s + ((b.amount || 0) < 0 ? -(b.tx?.actualAmount || 0) : (b.tx?.actualAmount || 0)), 0);
     const missed = pBills.filter(b => !b.tx && b.status !== 'cleared').length;
     return { id: p.id, name: p.name, category: p.category, expected, paid, missed };
-  }).filter(p => p.expected > 0).sort((a, b) => b.expected - a.expected);
+  }).filter(p => Math.abs(p.expected) > 0).sort((a, b) => Math.abs(b.expected) - Math.abs(a.expected));
 
   const maxProvSpend = Math.max(...providerSpend.map(p => p.expected), 1);
 
@@ -189,7 +192,10 @@ export default function Dashboard() {
           return month === mn && year === yr;
         });
         const exp = b.reduce((s, x) => s + (x.amount || 0) + (x.lateFee || 0), 0);
-        const paid = allTxs.filter(t => b.some(x => x.id === t.billId) && t.status === 'cleared').reduce((s, t) => s + (t.actualAmount || 0), 0);
+        const paid = allTxs.filter(t => b.some(x => x.id === t.billId) && t.status === 'cleared').reduce((s, t) => {
+          const matchedBill = b.find(x => x.id === t.billId);
+          return s + ((matchedBill && (matchedBill.amount || 0) < 0) ? -(t.actualAmount || 0) : (t.actualAmount || 0));
+        }, 0);
         return { label: `${MONTHS[mn - 1]} ${yr !== thisYear ? yr : ''}`.trim(), exp, paid, isCurrent: mn === thisMonth && yr === thisYear };
       });
     }
@@ -201,7 +207,10 @@ export default function Dashboard() {
           return year === yr;
         });
         const exp = b.reduce((s, x) => s + (x.amount || 0) + (x.lateFee || 0), 0);
-        const paid = allTxs.filter(t => b.some(x => x.id === t.billId) && t.status === 'cleared').reduce((s, t) => s + (t.actualAmount || 0), 0);
+        const paid = allTxs.filter(t => b.some(x => x.id === t.billId) && t.status === 'cleared').reduce((s, t) => {
+          const matchedBill = b.find(x => x.id === t.billId);
+          return s + ((matchedBill && (matchedBill.amount || 0) < 0) ? -(t.actualAmount || 0) : (t.actualAmount || 0));
+        }, 0);
         return { label: String(yr), exp, paid, isCurrent: yr === thisYear };
       });
     }
@@ -214,7 +223,10 @@ export default function Dashboard() {
         return month === mn && year === yr;
       });
       const exp = b.reduce((s, x) => s + (x.amount || 0) + (x.lateFee || 0), 0);
-      const paid = allTxs.filter(t => b.some(x => x.id === t.billId) && t.status === 'cleared').reduce((s, t) => s + (t.actualAmount || 0), 0);
+      const paid = allTxs.filter(t => b.some(x => x.id === t.billId) && t.status === 'cleared').reduce((s, t) => {
+        const matchedBill = b.find(x => x.id === t.billId);
+        return s + ((matchedBill && (matchedBill.amount || 0) < 0) ? -(t.actualAmount || 0) : (t.actualAmount || 0));
+      }, 0);
       return { label: MONTHS[i], exp, paid, isCurrent: mn === thisMonth && yr === thisYear };
     });
   }, [selectedPeriod, allBills, allTxs, availableYears]);
