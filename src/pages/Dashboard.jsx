@@ -136,22 +136,27 @@ export default function Dashboard() {
 
   const enrichedBills = periodBills.map(bill => {
     const provider = providers.find(p => p.id === bill.providerId);
-    const tx = allTxs.find(t => t.billId === bill.id && t.status === 'cleared');
-    return { ...bill, providerName: provider?.name || '?', category: provider?.category || '', tx };
+    return { ...bill, providerName: provider?.name || '?', category: provider?.category || '' };
   });
 
   const totalExpected = enrichedBills.reduce((s, b) => s + (b.amount || 0) + (b.lateFee || 0), 0);
-  const totalPaid = enrichedBills.filter(b => b.tx).reduce((s, b) => s + ((b.amount || 0) < 0 ? -(b.tx?.actualAmount || 0) : (b.tx?.actualAmount || 0)), 0);
-  const totalRemaining = enrichedBills.filter(b => !b.tx).reduce((s, b) => s + (b.amount || 0) + (b.lateFee || 0), 0);
+  const totalPaid = enrichedBills.reduce((s, b) => {
+    const amt = (b.amount || 0) + (b.lateFee || 0);
+    return s + (amt < 0 ? -(b.totalPaid || 0) : (b.totalPaid || 0));
+  }, 0);
+  const totalRemaining = enrichedBills.reduce((s, b) => {
+    const amt = (b.amount || 0) + (b.lateFee || 0);
+    return s + (amt < 0 ? amt + (b.totalPaid || 0) : amt - (b.totalPaid || 0));
+  }, 0);
   const totalFines = enrichedBills.reduce((s, b) => s + (b.lateFee || 0), 0);
-  const totalFinesPaid = enrichedBills.filter(b => b.tx).reduce((s, b) => s + (b.lateFee || 0), 0);
-  const clearedCount = enrichedBills.filter(b => b.tx).length;
+  const totalFinesPaid = enrichedBills.filter(b => b.status === 'cleared').reduce((s, b) => s + (b.lateFee || 0), 0);
+  const clearedCount = enrichedBills.filter(b => b.status === 'cleared').length;
   // Use sum of absolutes to determine % paid if there are refunds mixed in, or simple magnitude checking
   const absExpected = enrichedBills.reduce((s, b) => s + Math.abs((b.amount || 0) + (b.lateFee || 0)), 0);
-  const absPaid = enrichedBills.filter(b => b.tx).reduce((s, b) => s + Math.abs(b.tx?.actualAmount || 0), 0);
+  const absPaid = enrichedBills.reduce((s, b) => s + Math.abs(b.totalPaid || 0), 0);
   const paidPct = absExpected > 0 ? (absPaid / absExpected) * 100 : 0;
   const overdueBills = selectedPeriod === 'this_month'
-    ? enrichedBills.filter(b => !b.tx && b.billingPeriod?.type === 'month' && b.status === 'overdue')
+    ? enrichedBills.filter(b => b.billingPeriod?.type === 'month' && b.status === 'overdue')
     : [];
 
   // Contributions
@@ -162,8 +167,11 @@ export default function Dashboard() {
   const providerSpend = providers.map(p => {
     const pBills = enrichedBills.filter(b => b.providerId === p.id);
     const expected = pBills.reduce((s, b) => s + (b.amount || 0) + (b.lateFee || 0), 0);
-    const paid = pBills.filter(b => b.tx).reduce((s, b) => s + ((b.amount || 0) < 0 ? -(b.tx?.actualAmount || 0) : (b.tx?.actualAmount || 0)), 0);
-    const missed = pBills.filter(b => !b.tx && b.status !== 'cleared').length;
+    const paid = pBills.reduce((s, b) => {
+      const amt = (b.amount || 0) + (b.lateFee || 0);
+      return s + (amt < 0 ? -(b.totalPaid || 0) : (b.totalPaid || 0));
+    }, 0);
+    const missed = pBills.filter(b => b.status === 'overdue').length;
     return { id: p.id, name: p.name, category: p.category, expected, paid, missed };
   }).filter(p => Math.abs(p.expected) > 0).sort((a, b) => Math.abs(b.expected) - Math.abs(a.expected));
 
@@ -192,9 +200,9 @@ export default function Dashboard() {
           return month === mn && year === yr;
         });
         const exp = b.reduce((s, x) => s + (x.amount || 0) + (x.lateFee || 0), 0);
-        const paid = allTxs.filter(t => b.some(x => x.id === t.billId) && t.status === 'cleared').reduce((s, t) => {
-          const matchedBill = b.find(x => x.id === t.billId);
-          return s + ((matchedBill && (matchedBill.amount || 0) < 0) ? -(t.actualAmount || 0) : (t.actualAmount || 0));
+        const paid = b.reduce((s, x) => {
+          const amt = (x.amount || 0) + (x.lateFee || 0);
+          return s + (amt < 0 ? -(x.totalPaid || 0) : (x.totalPaid || 0));
         }, 0);
         return { label: `${MONTHS[mn - 1]} ${yr !== thisYear ? yr : ''}`.trim(), exp, paid, isCurrent: mn === thisMonth && yr === thisYear };
       });
@@ -207,9 +215,9 @@ export default function Dashboard() {
           return year === yr;
         });
         const exp = b.reduce((s, x) => s + (x.amount || 0) + (x.lateFee || 0), 0);
-        const paid = allTxs.filter(t => b.some(x => x.id === t.billId) && t.status === 'cleared').reduce((s, t) => {
-          const matchedBill = b.find(x => x.id === t.billId);
-          return s + ((matchedBill && (matchedBill.amount || 0) < 0) ? -(t.actualAmount || 0) : (t.actualAmount || 0));
+        const paid = b.reduce((s, x) => {
+          const amt = (x.amount || 0) + (x.lateFee || 0);
+          return s + (amt < 0 ? -(x.totalPaid || 0) : (x.totalPaid || 0));
         }, 0);
         return { label: String(yr), exp, paid, isCurrent: yr === thisYear };
       });
@@ -223,9 +231,9 @@ export default function Dashboard() {
         return month === mn && year === yr;
       });
       const exp = b.reduce((s, x) => s + (x.amount || 0) + (x.lateFee || 0), 0);
-      const paid = allTxs.filter(t => b.some(x => x.id === t.billId) && t.status === 'cleared').reduce((s, t) => {
-        const matchedBill = b.find(x => x.id === t.billId);
-        return s + ((matchedBill && (matchedBill.amount || 0) < 0) ? -(t.actualAmount || 0) : (t.actualAmount || 0));
+      const paid = b.reduce((s, x) => {
+        const amt = (x.amount || 0) + (x.lateFee || 0);
+        return s + (amt < 0 ? -(x.totalPaid || 0) : (x.totalPaid || 0));
       }, 0);
       return { label: MONTHS[i], exp, paid, isCurrent: mn === thisMonth && yr === thisYear };
     });
@@ -531,7 +539,7 @@ export default function Dashboard() {
 
           {/* Upcoming this month (only in month view) */}
           {selectedPeriod === 'this_month' && (() => {
-            const upcoming = enrichedBills.filter(b => !b.tx && b.expectedDay >= todayDay && b.expectedDay <= todayDay + 7).sort((a, b) => a.expectedDay - b.expectedDay);
+            const upcoming = enrichedBills.filter(b => b.status !== 'cleared' && b.expectedDay >= todayDay && b.expectedDay <= todayDay + 7).sort((a, b) => a.expectedDay - b.expectedDay);
             if (upcoming.length === 0) return null;
             return (
               <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
